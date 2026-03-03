@@ -1,7 +1,7 @@
 ![raven](./docs/raven-logo-horizontal-full-light.png)
 
 > [!CAUTION]
-> This is a work in progress project. The current state of the project does not represent a production ready release.
+> The project is currently under development.
 
 Raven is a lightweight, self-hosted server monitoring and centralized logging tool. Drop a tiny agent on your Linux machines and get live system metrics, searchable logs, and automated alerts — all from one clean dashboard, without the expensive SaaS fees.
 
@@ -64,3 +64,7 @@ Metrics start flowing within 10 seconds. Add log file paths to `/etc/raven/agent
 See the [technical documentation](./docs/) for the architecture overview, tech stack, component design, setup flow, security model, and deployment strategy.
 
 See the [implementation specification](./docs/spec.md) for detailed design, implementation phases, user stories, testing strategy, and key decisions.
+
+## LICENSE
+
+The project is published under: [MIT LICENSE](./LICENSE)
