@@ -367,9 +367,10 @@ Stored in the `alert_rules` SQLite table. `hosts` and `channels` are JSON arrays
 
 ### 2.3 Dashboard
 
-Next.js application deployed on Vercel (for demo) or as an optional Docker Compose service (for self-hosting).
+React + Vite application built with Bun.
 
-Requires one environment variable: `RAVEN_API_URL=http://<server>:8080`
+Dashboard assets are compiled to `dashboard/dist/` and served directly by `raven-server` via axum static file routes.
+No external dashboard hosting is required.
 
 #### Pages
 
@@ -418,9 +419,10 @@ Requires one environment variable: `RAVEN_API_URL=http://<server>:8080`
    - `Heartbeat`: hostname, timestamp.
    - Service definition: `StreamMetrics`, `StreamLogs`, `Register`, `Heartbeat` RPCs.
 3. Set up `tonic-build` in `raven-proto/build.rs` for codegen.
-4. Scaffold Next.js app in `raven-dashboard/`.
-5. Create `docker-compose.yml` with VictoriaMetrics + ClickHouse. Verify services start and are reachable.
-6. Init Git repo. Set up GitHub Actions CI (clippy + test + build).
+4. Scaffold React + Vite app in `dashboard/` using Bun.
+5. Configure Vite build output and axum static serving (`ServeDir`) so `raven-server` serves `dashboard/dist` at `/`.
+6. Create `docker-compose.yml` with `raven-server`, VictoriaMetrics, and ClickHouse. Verify services start and are reachable.
+7. Init Git repo. Set up GitHub Actions CI (clippy + test + build + dashboard build with Bun).
 
 ### Phase 1 — Agent: System Metrics Collection
 
@@ -474,17 +476,18 @@ Requires one environment variable: `RAVEN_API_URL=http://<server>:8080`
 ### Phase 5 — Central Server: Query API
 
 1. Build `axum` HTTP API with all endpoints listed in section 2.2.
-2. `POST /api/auth/setup`: first-time admin account creation. Hash password with Argon2id, insert into `users` table. Return 409 if any user already exists.
-3. `POST /api/auth/login`: validate username + password against `users` table (Argon2id verify). Return JWT containing `user_id`, `role`, `exp`.
-4. JWT auth middleware: extract and validate JWT from `Authorization` header or httpOnly cookie. Inject user context into request extensions.
-5. User CRUD endpoints: `GET/POST /api/users` (admin only), `GET/PUT/DELETE /api/users/:id`, `GET/PUT /api/users/me`, `PUT /api/users/me/password`.
-6. Agent token management: `GET/POST /api/agents/tokens`, `DELETE /api/agents/tokens/:id`. Tokens scoped to creating user (admin sees all). Store SHA-256 hash in SQLite, return raw token only on creation.
-7. Agents endpoint: return registered agents from SQLite + live status from in-memory registry.
-8. Metrics endpoint: proxy to VictoriaMetrics `/api/v1/query_range`. Translate shorthand ranges (`5m`, `1h`, `7d`) to absolute timestamps. Adjust `step` parameter for downsampling.
-9. Logs endpoint: query ClickHouse with hostname, app, time range, search text filters. Paginate results.
-10. WebSocket endpoint for live log tail: register subscriber on broadcast channel, filter by host/app, forward matching lines.
-11. CORS configuration for dashboard origin.
-12. Test: full request cycle — create user, create token, connect agent, push data, query via API, verify results.
+2. Serve dashboard static assets (`dashboard/dist`) from axum at `/` and configure SPA fallback to `index.html`.
+3. `POST /api/auth/setup`: first-time admin account creation. Hash password with Argon2id, insert into `users` table. Return 409 if any user already exists.
+4. `POST /api/auth/login`: validate username + password against `users` table (Argon2id verify). Return JWT containing `user_id`, `role`, `exp`.
+5. JWT auth middleware: extract and validate JWT from `Authorization` header or httpOnly cookie. Inject user context into request extensions.
+6. User CRUD endpoints: `GET/POST /api/users` (admin only), `GET/PUT/DELETE /api/users/:id`, `GET/PUT /api/users/me`, `PUT /api/users/me/password`.
+7. Agent token management: `GET/POST /api/agents/tokens`, `DELETE /api/agents/tokens/:id`. Tokens scoped to creating user (admin sees all). Store SHA-256 hash in SQLite, return raw token only on creation.
+8. Agents endpoint: return registered agents from SQLite + live status from in-memory registry.
+9. Metrics endpoint: proxy to VictoriaMetrics `/api/v1/query_range`. Translate shorthand ranges (`5m`, `1h`, `7d`) to absolute timestamps. Adjust `step` parameter for downsampling.
+10. Logs endpoint: query ClickHouse with hostname, app, time range, search text filters. Paginate results.
+11. WebSocket endpoint for live log tail: register subscriber on broadcast channel, filter by host/app, forward matching lines.
+12. CORS configuration for dashboard origin.
+13. Test: full request cycle — create user, create token, connect agent, push data, query via API, verify results.
 
 ### Phase 6 — Alerting Engine
 
@@ -513,7 +516,7 @@ Requires one environment variable: `RAVEN_API_URL=http://<server>:8080`
 ### Phase 8 — Packaging & Polish
 
 1. Multi-stage Dockerfiles: `rust:slim` builder → `debian:bookworm-slim` runtime for server. Minimal image for agent.
-2. Final `docker-compose.yml` with all services, volumes, health checks.
+2. Final `docker-compose.yml` with `raven-server`, VictoriaMetrics, and ClickHouse services, volumes, and health checks.
 3. Agent install script (`install.sh`): detect arch, download binary, create config, create user, install systemd service.
 4. README: architecture diagram, setup instructions, screenshots, configuration reference.
 5. CI: clippy, tests, cross-compile `x86_64` + `aarch64` agent binaries, build + push Docker images to GHCR, attach binaries to GitHub Release on tag.
@@ -573,7 +576,7 @@ If time permits after core phases are complete:
 | Log tailing | `inotify` over polling | Kernel-level notification, zero CPU waste, instant detection of new lines |
 | Unix socket intake | Stretch goal | Core value is system metrics + log tailing. Custom app metrics are nice-to-have. |
 | Docker auto-discovery | Stretch goal (manual config first) | Manual path config is simpler to build and debug. Auto-discovery adds value later. |
-| Dashboard hosting | Vercel for demo, optional Docker service for self-hosters | Free hosting, nice URL for demo day. Self-hosters get it in Docker Compose. |
+| Dashboard hosting | Built static assets served by `raven-server` | Zero extra service, no external hosting dependency, same-origin API/WebSocket simplifies auth and CORS. |
 | Self-hostable design | Single `docker compose up`, auto-migrations, zero wiring | Follows the Plausible/Umami/Uptime Kuma pattern. Makes the project accessible. |
 | Application DB | SQLite (embedded) over PostgreSQL | No extra container, zero config, single file. CRUD workload is low-volume (users, tokens, alert rules) — SQLite handles it easily. ClickHouse is OLAP and unsuited for transactional CRUD. |
 | User auth | Argon2id password hashing + JWT | Industry standard. Argon2id is the recommended password hashing algorithm (OWASP). Stateless JWT avoids session table lookups on every request. |
@@ -604,13 +607,13 @@ This single command starts four services — all pre-configured to talk to each 
 - `raven-server` (Rust binary) — gRPC ingestion on port 9090, HTTP API on port 8080
 - `VictoriaMetrics` — time-series database for metrics (port 8428, internal only)
 - `ClickHouse` — columnar database for logs (port 8123, internal only)
-- `raven-dashboard` (optional) — Next.js frontend on port 3000
+- Dashboard UI is served by `raven-server` as static files (React + Vite build output)
 
 On first boot, `raven-server` auto-runs ClickHouse migrations (creates the `logs` table, alert rules table, etc.). No manual database setup.
 
 **B) Create your admin account (30 seconds):**
 
-Open `http://140.238.xx.xx:8080` (or your Vercel-hosted dashboard URL). You're greeted with a first-time setup screen:
+Open `http://140.238.xx.xx:8080`. You're greeted with a first-time setup screen:
 - Enter a username and password.
 - This creates the admin account and issues a JWT.
 - You're redirected to an empty Agents Overview page: "No agents connected yet. Add your first agent →"

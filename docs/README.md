@@ -74,8 +74,8 @@ A lightweight, self-hostable server monitoring and centralized logging tool.
                     │
                     │ HTTPS
                     ▼
-┌──────────── Vercel (or self-hosted) ──────────┐
-│  raven-dashboard (Next.js)                    │
+┌──────────────── Browser Clients ──────────────┐
+│  Static dashboard served by axum (`/`)        │
 │  - Agents overview with sparklines            │
 │  - Host detail with time-series charts        │
 │  - Log explorer with live tail                │
@@ -139,7 +139,7 @@ A lightweight, self-hostable server monitoring and centralized logging tool.
 
 | Component | Technology | Purpose |
 |---|---|---|
-| Framework | Next.js + React | SSR for initial load, client-side for interactivity |
+| Framework | React + Vite (Bun) | Built to static files and served directly by the axum server |
 | Styling | Tailwind CSS | Utility-first, responsive, dark mode |
 | Charts | Apache ECharts (`echarts-for-react`) | Time-series visualization, handles large datasets |
 | Data fetching | TanStack Query | Caching, refetching, loading states for REST API |
@@ -247,7 +247,11 @@ Metrics support shorthand ranges (`5m`, `15m`, `1h`, `6h`, `24h`, `7d`) and cust
 
 ### Dashboard
 
-Next.js application. Requires one environment variable: `RAVEN_API_URL=http://<server>:8080`.
+React + Vite application built with Bun and served as static assets by `raven-server`.
+
+- Build output: `dashboard/dist/`
+- Served by axum at `/`
+- API + WebSocket stay same-origin (`/api/*`, `/api/ws/*`), so no `RAVEN_API_URL` is required in production
 
 **Pages:**
 
@@ -341,10 +345,10 @@ services:
   raven-server:      # Rust binary, ports 8080 (HTTP) + 9090 (gRPC), embeds SQLite
   victoriametrics:   # Official image, port 8428 internal
   clickhouse:        # Official image, port 8123 internal
-  raven-dashboard:   # Next.js, port 3000 (optional, can use Vercel instead)
+  # no separate dashboard service
 ```
 
-All services pre-configured over Docker's internal network. Volumes for VictoriaMetrics data, ClickHouse data, and SQLite database file.
+All services pre-configured over Docker's internal network. Volumes for VictoriaMetrics data, ClickHouse data, and SQLite database file. The dashboard bundle is embedded in the `raven-server` image and served directly by axum.
 
 ### Demo Deployment (Oracle Cloud Free Tier)
 
@@ -353,7 +357,7 @@ All services pre-configured over Docker's internal network. Volumes for Victoria
 | ARM VM #1 | 2 OCPU, 12 GB RAM | Central server: `docker compose` with raven-server + VictoriaMetrics + ClickHouse |
 | x86 micro VM #1 | 1/8 OCPU, 1 GB RAM | Monitored server: raven-agent + nginx + sample app |
 | x86 micro VM #2 | 1/8 OCPU, 1 GB RAM | Second monitored server (optional) |
-| Vercel | Free tier | Dashboard (Next.js) |
+| Dashboard hosting | Included in `raven-server` | Static assets served directly by axum |
 
 Resource usage on the ARM VM: ~2-3 GB of 12 GB RAM, ~5-10 GB of 200 GB disk. Total cost: **$0/month**.
 
@@ -361,7 +365,7 @@ Resource usage on the ARM VM: ~2-3 GB of 12 GB RAM, ~5-10 GB of 200 GB disk. Tot
 
 1. On push: `clippy` lint + `cargo test`
 2. On tag: cross-compile agent binary for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`
-3. Build and push Docker images (server + dashboard) to GHCR
+3. Build and push Docker image (`raven-server`, includes dashboard assets) to GHCR
 4. Attach agent binaries to GitHub Release
 
 ---
