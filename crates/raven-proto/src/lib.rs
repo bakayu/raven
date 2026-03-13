@@ -2,8 +2,8 @@
 ///
 /// Usage:
 /// ```rust
-/// use raven_proto::proto::agent_service_client::AgentServiceClient;
-/// use raven_proto::proto::agent_service_server::{AgentService, AgentServiceServer};
+/// use raven_proto::proto::raven_ingestion_client::RavenIngestionClient;
+/// use raven_proto::proto::raven_ingestion_server::{RavenIngestion, RavenIngestionServer};
 /// use raven_proto::proto::{HeartbeatRequest, HeartbeatResponse};
 /// ```
 pub mod proto {

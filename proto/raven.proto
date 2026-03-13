@@ -3,8 +3,8 @@ package raven_v1;
 
 import "google/protobuf/timestamp.proto";
 
-// Service definition for the AgentService
-service AgentService {
+// Service definition for the raven server and agent
+service RavenIngestion {
   // Heartbeat method for agents to send periodic updates to the server
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }
