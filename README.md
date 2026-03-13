@@ -59,6 +59,41 @@ Metrics start flowing within 10 seconds. Add log file paths to `/etc/raven/agent
 4. The dashboard queries the server's API for charts, log search, and live tailing via WebSocket
 5. An alert engine evaluates threshold rules every 30 seconds and sends notifications on state changes
 
+## Development
+
+### Prerequisites
+
+- `rust`: `v1.85+`
+- `protoc`: any recent version
+- `bun`: `v1.x`
+- `docker` and `docker-compose` (optional, if you want to run the raven-server with docker): any recent version
+
+### Running locally (without docker)
+
+1. Start the server
+
+```bash
+cargo run -p raven-server
+```
+
+Listens on `0.0.0.0:9090` (gRPC) by default.
+
+2. Run the agent (seperate terminal)
+
+```bash
+cargo run -p raven-agent
+```
+
+The agent connects to `localhost:9090` by default. You should see heartbeat logs in both terminals.
+
+### Running with docker
+
+The only difference here is how you run the server:
+
+```bash
+docker compose up --build
+```
+
 ## Documentation
 
 See the [technical documentation](./docs/) for the architecture overview, tech stack, component design, setup flow, security model, and deployment strategy.
