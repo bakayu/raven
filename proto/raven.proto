@@ -1,0 +1,23 @@
+syntax = "proto3";
+package raven_v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Service definition for the raven server and agent
+service RavenIngestion {
+  // Heartbeat method for agents to send periodic updates to the server
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// Request from the agent to the server for the Heartbeat method
+message HeartbeatRequest {
+  string agent_id = 1;
+  string hostname = 2;
+  google.protobuf.Timestamp sent_at = 3;
+}
+
+// Response from the server to HeartbeatRequest
+message HeartbeatResponse {
+  string message = 1;
+  string status = 2;
+}

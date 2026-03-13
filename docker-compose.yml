@@ -1,0 +1,46 @@
+services:
+  raven-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "8080:8080"   # HTTP API + dashboard
+      - "9090:9090"   # gRPC ingestion
+    volumes:
+      - raven-data:/var/lib/raven
+      - ./config/server.toml:/etc/raven/server.toml:ro
+    environment:
+      - RUST_LOG=raven_server=info
+    # depends_on:
+    #   victoriametrics:
+    #     condition: service_started
+    #   clickhouse:
+    #     condition: service_started
+    restart: unless-stopped
+
+  # victoriametrics:
+  #   image: victoriametrics/victoria-metrics:v1.137.0
+  #   volumes:
+  #     - vm-data:/victoria-metrics-data
+  #   command:
+  #     - "-storageDataPath=/victoria-metrics-data"
+  #     - "-retentionPeriod=30d"
+  #   restart: unless-stopped
+
+  # clickhouse:
+  #   image: clickhouse/clickhouse-server:26.2-alpine
+  #   volumes:
+  #     - ch-data:/var/lib/clickhouse
+  #   environment:
+  #     - CLICKHOUSE_DB=raven
+  #     - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+  #   ulimits:
+  #     nofile:
+  #       soft: 262144
+  #       hard: 262144
+  #   restart: unless-stopped
+
+volumes:
+  raven-data:
+  # vm-data:
+  # ch-data:
