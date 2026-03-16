@@ -3,6 +3,7 @@ mod cpu;
 use cpu::{CpuSampler, CpuStats};
 
 /// Main handler to collect all proc information
+#[derive(Default)]
 pub struct Collector {
     pub cpu_sampler: CpuSampler,
 }
@@ -12,7 +13,7 @@ pub struct Collector {
 ///
 /// It consists of all data collected every tick.
 #[derive(Debug)]
-pub struct Snapshot {
+pub struct StatsSnapshot {
     pub cpu: CpuStats,
 }
 
@@ -27,8 +28,8 @@ impl Collector {
     // network and loadavg
 
     /// Run all sub-handlers
-    pub async fn collect(&mut self) -> anyhow::Result<Snapshot> {
+    pub async fn collect(&mut self) -> anyhow::Result<StatsSnapshot> {
         let cpu = self.cpu_sampler.sample().await?.unwrap_or_default();
-        Ok(Snapshot { cpu })
+        Ok(StatsSnapshot { cpu })
     }
 }

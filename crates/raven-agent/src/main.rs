@@ -1,43 +1,21 @@
 use std::error::Error;
-use std::time::Duration;
+use tokio::sync::mpsc;
 
-use chrono::Utc;
-use prost_types::Timestamp;
-
-use raven_agent::Collector;
-use raven_proto::proto::HeartbeatRequest;
-use raven_proto::proto::raven_ingestion_client::RavenIngestionClient;
+use raven_agent::{collector_task, heartbeat_task, transport_task};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut client = RavenIngestionClient::connect("http://localhost:9090").await?;
+    let (tx, rx) = mpsc::channel(256);
 
-    let mut interval = tokio::time::interval(Duration::from_millis(2_000));
+    let heartbeat_task_handle = tokio::spawn(heartbeat_task(tx.clone()));
+    let collector_task_handle = tokio::spawn(collector_task(tx.clone()));
+    let transport_task_handle = tokio::spawn(transport_task(rx));
 
-    let mut proc_collector = Collector::new();
-
-    loop {
-        interval.tick().await;
-
-        let stats = proc_collector.collect().await?;
-        println!("{:?}", stats);
-
-        let now = Utc::now();
-        let timestamp = Timestamp {
-            seconds: now.timestamp(),
-            nanos: now.timestamp_subsec_nanos() as i32,
-        };
-
-        let response = client
-            .heartbeat(HeartbeatRequest {
-                agent_id: "agent-1".into(),
-                hostname: "my-machine".into(),
-                sent_at: Some(timestamp),
-            })
-            .await?;
-
-        println!("RESPONSE: {:?}", response.into_inner());
-    }
+    tokio::try_join!(
+        heartbeat_task_handle,
+        collector_task_handle,
+        transport_task_handle
+    )?;
 
     Ok(())
 }

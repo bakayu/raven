@@ -14,6 +14,7 @@ pub struct CpuStats {
 /// `None` and will stay as `None` until `CpuSampler.sample()` is called.
 /// Calling `sample()` will set `prev` as the current CpuTime, subsequent
 /// calls return the delta calculated as CpuStats.
+#[derive(Default)]
 pub struct CpuSampler {
     prev: Option<CpuTime>,
 }
@@ -27,7 +28,7 @@ impl CpuSampler {
     /// if CpuSampler exists, calculate the cpu usage delta and return
     /// new CpuStat
     pub async fn sample(&mut self) -> anyhow::Result<Option<CpuStats>> {
-        let cur_cpu_time = tokio::task::spawn_blocking(|| KernelStats::current())
+        let cur_cpu_time = tokio::task::spawn_blocking(KernelStats::current)
             .await??
             .total;
         if let Some(prev_cpu_time) = &self.prev {
