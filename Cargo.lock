@@ -1716,6 +1716,7 @@ dependencies = [
  "procfs",
  "prost-types",
  "raven-proto",
+ "rustix",
  "serde",
  "tokio",
  "toml",

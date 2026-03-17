@@ -29,10 +29,13 @@ pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>) {
                     .await
                     .unwrap();
 
-                println!("RESPONSE: {:?}", response.into_inner());
+                println!("HEARTBEAT RESPONSE: {:?}", response.into_inner());
             }
-            AgentEvent::Metrics(stats) => {
-                println!("GOT STATS: {:#?}", stats);
+            AgentEvent::Metrics(snapshot) => {
+                println!("METRICS: {:#?}", snapshot);
+            }
+            AgentEvent::Inventory(snapshot) => {
+                println!("INVENTORY: {:#?}", snapshot);
             }
         }
     }

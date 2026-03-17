@@ -1,39 +1,60 @@
 mod cpu;
+mod disk;
 mod memory;
 
 use cpu::{CpuSampler, CpuStats};
+use disk::{DiskInventory, DiskSampler, DiskStats};
 use memory::MemoryStats;
 
 /// Main handler to collect all proc information
 #[derive(Default)]
 pub struct Collector {
     pub cpu_sampler: CpuSampler,
+    pub disk_sampler: DiskSampler,
 }
 
-/// Snapshot is one instance of `proc` data collected
-/// by the Collector.
-///
-/// It consists of all data collected every tick.
 #[derive(Debug)]
 pub struct StatsSnapshot {
     pub cpu: CpuStats,
     pub memory: MemoryStats,
+    pub disk: DiskStats,
+}
+
+#[derive(Debug)]
+pub struct InventorySnapshot {
+    pub disk: DiskInventory,
+}
+
+#[derive(Debug)]
+pub struct CollectOutput {
+    pub telemetry: StatsSnapshot,
+    pub inventory: Option<InventorySnapshot>,
 }
 
 impl Collector {
     pub fn new() -> Self {
         Self {
             cpu_sampler: CpuSampler::new(),
+            disk_sampler: DiskSampler::new(),
         }
     }
 
-    // TODO: currently only supports cpu, need to add: memory, disk
-    // network and loadavg
-
-    /// Run all sub-handlers
-    pub async fn collect(&mut self) -> anyhow::Result<StatsSnapshot> {
+    pub async fn collect(&mut self) -> anyhow::Result<CollectOutput> {
         let cpu = self.cpu_sampler.sample().await?.unwrap_or_default();
         let memory = MemoryStats::collect().await?;
-        Ok(StatsSnapshot { cpu, memory })
+        let disk_output = self.disk_sampler.sample().await?;
+
+        let telemetry = StatsSnapshot {
+            cpu,
+            memory,
+            disk: disk_output.telemetry,
+        };
+
+        let inventory = disk_output.inventory.map(|disk| InventorySnapshot { disk });
+
+        Ok(CollectOutput {
+            telemetry,
+            inventory,
+        })
     }
 }
