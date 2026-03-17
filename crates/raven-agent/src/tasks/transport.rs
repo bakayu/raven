@@ -32,7 +32,7 @@ pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>) {
                 println!("RESPONSE: {:?}", response.into_inner());
             }
             AgentEvent::Metrics(stats) => {
-                println!("GOT STATS: {:?}", stats);
+                println!("GOT STATS: {:#?}", stats);
             }
         }
     }

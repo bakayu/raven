@@ -1,6 +1,8 @@
 mod cpu;
+mod memory;
 
 use cpu::{CpuSampler, CpuStats};
+use memory::MemoryStats;
 
 /// Main handler to collect all proc information
 #[derive(Default)]
@@ -15,6 +17,7 @@ pub struct Collector {
 #[derive(Debug)]
 pub struct StatsSnapshot {
     pub cpu: CpuStats,
+    pub memory: MemoryStats,
 }
 
 impl Collector {
@@ -30,6 +33,7 @@ impl Collector {
     /// Run all sub-handlers
     pub async fn collect(&mut self) -> anyhow::Result<StatsSnapshot> {
         let cpu = self.cpu_sampler.sample().await?.unwrap_or_default();
-        Ok(StatsSnapshot { cpu })
+        let memory = MemoryStats::collect().await?;
+        Ok(StatsSnapshot { cpu, memory })
     }
 }
