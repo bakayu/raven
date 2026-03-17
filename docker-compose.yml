@@ -2,7 +2,7 @@ services:
   raven-server:
     build:
       context: .
-      dockerfile: Dockerfile.server
+      dockerfile: Dockerfile
     ports:
       - "8080:8080"   # HTTP API + dashboard
       - "9090:9090"   # gRPC ingestion
