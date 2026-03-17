@@ -336,12 +336,12 @@ fn resolve_parent_device(source: &str) -> Option<String> {
         .join("partition");
     if partition_marker.exists() {
         let parent = Path::new("/sys/class/block").join(dev_name).join("..");
-        if let Ok(canon) = std::fs::canonicalize(parent) {
-            if let Some(name) = canon.file_name().and_then(|s| s.to_str()) {
-                if !name.is_empty() && name != "block" {
-                    return Some(name.to_string());
-                }
-            }
+        if let Ok(canon) = std::fs::canonicalize(parent)
+            && let Some(name) = canon.file_name().and_then(|s| s.to_str())
+            && !name.is_empty()
+            && name != "block"
+        {
+            return Some(name.to_string());
         }
     }
 

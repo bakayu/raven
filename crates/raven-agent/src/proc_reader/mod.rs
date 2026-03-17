@@ -1,9 +1,11 @@
 mod cpu;
 mod disk;
+mod loadavg;
 mod memory;
 
 use cpu::{CpuSampler, CpuStats};
 use disk::{DiskInventory, DiskSampler, DiskStats};
+use loadavg::LoadAvgStats;
 use memory::MemoryStats;
 
 /// Main handler to collect all proc information
@@ -18,6 +20,7 @@ pub struct StatsSnapshot {
     pub cpu: CpuStats,
     pub memory: MemoryStats,
     pub disk: DiskStats,
+    pub loadavg: LoadAvgStats,
 }
 
 #[derive(Debug)]
@@ -43,11 +46,13 @@ impl Collector {
         let cpu = self.cpu_sampler.sample().await?.unwrap_or_default();
         let memory = MemoryStats::collect().await?;
         let disk_output = self.disk_sampler.sample().await?;
+        let loadavg = LoadAvgStats::collect().await?;
 
         let telemetry = StatsSnapshot {
             cpu,
             memory,
             disk: disk_output.telemetry,
+            loadavg,
         };
 
         let inventory = disk_output.inventory.map(|disk| InventorySnapshot { disk });
