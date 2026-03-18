@@ -10,9 +10,14 @@ pub async fn collector_task(tx: mpsc::Sender<AgentEvent>) {
 
     loop {
         interval.tick().await;
+
         match collector.collect().await {
-            Ok(snapshot) => {
-                let _ = tx.send(AgentEvent::Metrics(snapshot)).await;
+            Ok(output) => {
+                let _ = tx.send(AgentEvent::Metrics(output.telemetry)).await;
+
+                if let Some(inventory) = output.inventory {
+                    let _ = tx.send(AgentEvent::Inventory(inventory)).await;
+                }
             }
             Err(e) => {
                 eprintln!("collector error: {}", e);
