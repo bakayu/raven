@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use config::{Config, Environment, File};
+use secrecy::SecretString;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -9,6 +10,7 @@ pub struct AgentConfig {
     pub server: ServerConfig,
     pub metrics: MetricsConfig,
     pub transport: TransportConfig,
+    pub logging: LoggingConfig,
     pub logs: Vec<LogSource>,
 }
 
@@ -16,7 +18,7 @@ pub struct AgentConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
     pub address: String,
-    pub token: String,
+    pub token: SecretString,
     pub tls: bool,
 }
 
@@ -33,6 +35,15 @@ pub struct TransportConfig {
     pub flush_interval_seconds: u64,
     pub retry_max_interval_seconds: u64,
     pub wal_max_size_mb: u64,
+    pub heartbeat_interval_seconds: u64,
+    pub channel_capacity: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub service_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,6 +68,7 @@ impl Default for AgentConfig {
             server: ServerConfig::default(),
             metrics: MetricsConfig::default(),
             transport: TransportConfig::default(),
+            logging: LoggingConfig::default(),
             logs: Vec::new(),
         }
     }
@@ -65,8 +77,8 @@ impl Default for AgentConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            address: "127.0.0.1:9000".to_string(),
-            token: String::new(),
+            address: "127.0.0.1:9090".to_string(),
+            token: SecretString::new(String::new().into()),
             tls: true,
         }
     }
@@ -87,6 +99,17 @@ impl Default for TransportConfig {
             flush_interval_seconds: 5,
             retry_max_interval_seconds: 60,
             wal_max_size_mb: 100,
+            heartbeat_interval_seconds: 30,
+            channel_capacity: 256,
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: "info".to_string(),
+            service_name: "raven-agent".to_string(),
         }
     }
 }
@@ -112,6 +135,10 @@ impl AgentConfig {
             .set_default("transport.flush_interval_seconds", 5)?
             .set_default("transport.retry_max_interval_seconds", 60)?
             .set_default("transport.wal_max_size_mb", 100)?
+            .set_default("transport.heartbeat_interval_seconds", 30)?
+            .set_default("transport.channel_capacity", 256)?
+            .set_default("logging.level", "info")?
+            .set_default("logging.service_name", "raven-agent")?
             .add_source(File::from(path).required(false))
             .add_source(Environment::with_prefix("RAVEN").separator("__"))
             .build()?;

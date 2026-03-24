@@ -1,11 +1,12 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use tokio::sync::mpsc;
+use tracing::{error, warn};
 
-use crate::{AgentEvent, Collector};
+use crate::{AgentConfig, AgentEvent, Collector};
 
-pub async fn collector_task(tx: mpsc::Sender<AgentEvent>) {
-    let mut interval = tokio::time::interval(Duration::from_millis(1_000));
+pub async fn collector_task(tx: mpsc::Sender<AgentEvent>, cfg: Arc<AgentConfig>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(cfg.metrics.interval_seconds));
     let mut collector = Collector::new();
 
     loop {
@@ -13,14 +14,24 @@ pub async fn collector_task(tx: mpsc::Sender<AgentEvent>) {
 
         match collector.collect().await {
             Ok(output) => {
-                let _ = tx.send(AgentEvent::Metrics(output.telemetry)).await;
+                if tx
+                    .send(AgentEvent::Metrics(output.telemetry))
+                    .await
+                    .is_err()
+                {
+                    warn!("collector task exiting: channel closed");
+                    break;
+                }
 
-                if let Some(inventory) = output.inventory {
-                    let _ = tx.send(AgentEvent::Inventory(inventory)).await;
+                if let Some(inventory) = output.inventory
+                    && tx.send(AgentEvent::Inventory(inventory)).await.is_err()
+                {
+                    warn!("collector inventory send failed: channel closed");
+                    break;
                 }
             }
-            Err(e) => {
-                eprintln!("collector error: {}", e);
+            Err(error_value) => {
+                error!(error = %error_value, "collector error");
             }
         }
     }
