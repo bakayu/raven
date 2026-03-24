@@ -13,3 +13,7 @@ retry_max_interval_seconds = 60
 wal_max_size_mb = 100
 heartbeat_interval_seconds = 30
 channel_capacity = 256
+
+[logging]
+level = "info"
+service_name = "raven-agent"

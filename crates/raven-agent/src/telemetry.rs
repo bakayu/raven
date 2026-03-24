@@ -1,11 +1,8 @@
 use anyhow::Context;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
-use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, Registry, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub fn init_subscriber(service_name: &str, default_level: &str) -> anyhow::Result<()> {
-    LogTracer::init().ok();
-
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
 
