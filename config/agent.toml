@@ -1,0 +1,19 @@
+[server]
+address = "127.0.0.1:9090"
+token = "rvn_dev_token"
+tls = true
+
+[metrics]
+interval_seconds = 10
+
+[transport]
+batch_size = 100
+flush_interval_seconds = 5
+retry_max_interval_seconds = 60
+wal_max_size_mb = 100
+heartbeat_interval_seconds = 30
+channel_capacity = 256
+
+[logging]
+level = "info"
+service_name = "raven-agent"

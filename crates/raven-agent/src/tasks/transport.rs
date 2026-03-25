@@ -1,42 +1,71 @@
+use std::{sync::Arc, time::Duration};
+
 use chrono::Utc;
 use prost_types::Timestamp;
 use tokio::sync::mpsc;
+use tracing::{debug, info, warn};
 
 use raven_proto::proto::HeartbeatRequest;
 use raven_proto::proto::raven_ingestion_client::RavenIngestionClient;
 
-use crate::AgentEvent;
+use crate::{AgentConfig, AgentEvent};
 
-pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>) {
-    let mut client = RavenIngestionClient::connect("http://localhost:9090")
-        .await
-        .unwrap();
+pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentConfig>) {
+    let max_backoff = Duration::from_secs(cfg.transport.retry_max_interval_seconds.max(1));
+    let mut backoff = Duration::from_secs(1);
 
-    while let Some(event) = rx.recv().await {
-        match event {
-            AgentEvent::Heartbeat { agent_id, hostname } => {
-                let now = Utc::now();
+    loop {
+        let endpoint = format!("http://{}", cfg.server.address);
 
-                let response = client
-                    .heartbeat(HeartbeatRequest {
-                        agent_id,
-                        hostname,
-                        sent_at: Some(Timestamp {
-                            seconds: now.timestamp(),
-                            nanos: now.timestamp_subsec_nanos() as i32,
-                        }),
-                    })
-                    .await
-                    .unwrap();
+        match RavenIngestionClient::connect(endpoint.clone()).await {
+            Ok(mut client) => {
+                info!(server = %cfg.server.address, "transport connected");
+                backoff = Duration::from_secs(1);
 
-                println!("HEARTBEAT RESPONSE: {:?}", response.into_inner());
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        AgentEvent::Heartbeat { agent_id, hostname } => {
+                            let now = Utc::now();
+
+                            let request = HeartbeatRequest {
+                                agent_id,
+                                hostname,
+                                sent_at: Some(Timestamp {
+                                    seconds: now.timestamp(),
+                                    nanos: now.timestamp_subsec_nanos() as i32,
+                                }),
+                            };
+
+                            if let Err(error_value) = client.heartbeat(request).await {
+                                warn!(error = %error_value, "heartbeat send failed; reconnecting");
+                                break;
+                            }
+                        }
+                        AgentEvent::Metrics(snapshot) => {
+                            debug!(?snapshot, "metrics event queued for transport");
+                        }
+                        AgentEvent::Inventory(snapshot) => {
+                            debug!(?snapshot, "inventory event queued for transport");
+                        }
+                    }
+                }
+
+                if rx.is_closed() {
+                    info!("transport exiting: receiver closed");
+                    return;
+                }
             }
-            AgentEvent::Metrics(snapshot) => {
-                println!("METRICS: {:#?}", snapshot);
-            }
-            AgentEvent::Inventory(snapshot) => {
-                println!("INVENTORY: {:#?}", snapshot);
+            Err(error_value) => {
+                warn!(
+                    error = %error_value,
+                    server = %cfg.server.address,
+                    retry_seconds = backoff.as_secs(),
+                    "transport connect failed"
+                );
             }
         }
+
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(max_backoff);
     }
 }

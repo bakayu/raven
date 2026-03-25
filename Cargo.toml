@@ -50,6 +50,9 @@ lettre = { version = "0.11", default-features = false, features = [
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-bunyan-formatter = "0.3"
+tracing-log = "0.2"
+secrecy = { version = "0.10", features = ["serde"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
