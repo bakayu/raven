@@ -4,7 +4,7 @@ use config::{Config, Environment, File};
 use secrecy::SecretString;
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentConfig {
     pub server: ServerConfig,
@@ -60,18 +60,6 @@ pub enum LogFormat {
     #[default]
     Plain,
     DockerJson,
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            metrics: MetricsConfig::default(),
-            transport: TransportConfig::default(),
-            logging: LoggingConfig::default(),
-            logs: Vec::new(),
-        }
-    }
 }
 
 impl Default for ServerConfig {
