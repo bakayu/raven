@@ -5,9 +5,39 @@ import "google/protobuf/timestamp.proto";
 
 // Service definition for the raven server and agent
 service RavenIngestion {
+  // Agent registration method for agents to register themselves with the server
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Metrics rpc - unary method
+  rpc IngestMetrics(MetricBatch) returns (StreamResponse);
+
+  //Mtrics rpc - stream
+  // rpc StreamMetrics(stream MetricBatch) returns (StreamResponse);
+
+  // rpc StreamLogs(stream LogBatch) returns (StreamResponse);
+
   // Heartbeat method for agents to send periodic updates to the server
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }
+
+/// Registration
+
+// Request from the agent to the server for the Register method
+message RegisterRequest {
+  string agent_id = 1;
+  string hostname = 2;
+  string os = 3;
+  string agent_version = 4;
+  repeated string log_files = 5;
+}
+
+// Response from the server to RegisterRequest
+message RegisterResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+/// Heartbeat
 
 // Request from the agent to the server for the Heartbeat method
 message HeartbeatRequest {
@@ -18,6 +48,98 @@ message HeartbeatRequest {
 
 // Response from the server to HeartbeatRequest
 message HeartbeatResponse {
-  string message = 1;
-  string status = 2;
+  bool ok = 1;
+  string message = 2;
+}
+
+/// Metrics
+
+// Batch of metrics sent from the agent to the server
+message MetricBatch {
+  string agent_id = 1;
+  string hostname = 2;
+  google.protobuf.Timestamp sent_at = 3;
+
+  CpuMetrics cpu = 10;
+  MemoryMetrics memory = 11;
+
+  repeated DeviceIoMetrics disk_io = 12;
+  repeated FilesystemMetrics filesystems = 13;
+
+  NetworkTotals network_total = 14;
+  repeated NetworkInterfaceMetrics network_interfaces = 15;
+
+  LoadAverage load_average = 16;
+}
+
+// CPU usage metrics
+message CpuMetrics {
+  double total_usage_percent = 1;
+  repeated double per_core_usage_percent = 2;
+}
+
+// Memory usage metrics
+message MemoryMetrics {
+  uint64 total_bytes = 1;
+  uint64 used_bytes = 2;
+  uint64 available_bytes = 3;
+
+  uint64 swap_total_bytes = 4;
+  uint64 swap_used_bytes = 5;
+  uint64 swap_cached_bytes = 6;
+
+  uint64 buffers_bytes = 7;
+  uint64 cached_bytes = 8;
+
+  optional uint64 zswap_bytes = 9;
+}
+
+// Disk I/O metrics for a single device
+message DeviceIoMetrics {
+  string device = 1;
+  double read_bytes_per_sec = 2;
+  double write_bytes_per_sec = 3;
+  double read_iops = 4;
+  double write_iops = 5;
+}
+
+// Filesystem usage metrics for a single mount point
+message FilesystemMetrics {
+  string source = 1;
+  string fs_type = 2;
+  optional string parent_device = 3;
+
+  uint64 total_bytes = 4;
+  uint64 used_bytes = 5;
+  uint64 free_bytes = 6;
+  uint64 avail_bytes = 7;
+  double used_percent = 8;
+}
+
+// Network metrics aggregated across all interfaces
+message NetworkTotals {
+  double rx_bytes_per_sec = 1;
+  double tx_bytes_per_sec = 2;
+}
+
+// Network metrics for a single interface
+message NetworkInterfaceMetrics {
+  string name = 1;
+  double rx_bytes_per_sec = 2;
+  double tx_bytes_per_sec = 3;
+}
+
+// Load average metrics
+message LoadAverage {
+  double one_min = 1;
+  double five_min = 2;
+  double fifteen_min = 3;
+}
+
+/// Response
+
+// Generic response message for streaming RPCs like StreamMetrics and StreamLogs
+message StreamResponse {
+  bool ok = 1;
+  string message = 2;
 }
