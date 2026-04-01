@@ -2,7 +2,7 @@ use procfs::{Current, LoadAverage};
 
 /// LoadAvgStats contains the averages of jobs run in the
 /// last 1, 5 and 15 minutes.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LoadAvgStats {
     pub one: f64,
     pub five: f64,

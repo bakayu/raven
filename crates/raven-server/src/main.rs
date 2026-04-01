@@ -1,7 +1,6 @@
 use chrono::{TimeZone, Utc};
-use tokio::net::unix::ReuniteError;
 use tonic::{Request, Response, Status, transport::Server};
-use tracing::info;
+use tracing::{debug, info};
 
 use raven_proto::proto::raven_ingestion_server::{RavenIngestion, RavenIngestionServer};
 use raven_proto::proto::{
@@ -48,7 +47,39 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<MetricBatch>,
     ) -> Result<Response<StreamResponse>, Status> {
-        todo!()
+        let batch = request.into_inner();
+
+        let sent_at = batch
+            .sent_at
+            .ok_or_else(|| Status::invalid_argument("missing sent_at"))?;
+
+        let date_time = Utc
+            .timestamp_opt(sent_at.seconds, sent_at.nanos as u32)
+            .single()
+            .ok_or_else(|| Status::invalid_argument("invalid sent_at timestamp"))?;
+
+        let cpu_total = batch
+            .cpu
+            .as_ref()
+            .map(|c| c.total_usage_percent)
+            .unwrap_or_default();
+
+        // TODO: this is just for debugging, included some of the info from MetricBatch
+        debug!(
+            agent_id = %batch.agent_id,
+            hostname = %batch.hostname,
+            sent_at = %date_time,
+            cpu_total = cpu_total,
+            disk_io = batch.disk_io.len(),
+            filesystems = batch.filesystems.len(),
+            interfaces = batch.network_interfaces.len(),
+            "metrics batch received"
+        );
+
+        Ok(Response::new(StreamResponse {
+            ok: true,
+            message: "metrics accepted".to_string(),
+        }))
     }
 
     async fn heartbeat(
