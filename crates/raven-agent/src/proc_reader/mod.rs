@@ -18,7 +18,7 @@ pub struct Collector {
     pub network_sampler: NetworkSampler,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StatsSnapshot {
     pub cpu: CpuStats,
     pub memory: MemoryStats,

@@ -1,7 +1,7 @@
 use procfs::{Current, Meminfo};
 
 /// MemoryStats contains memory information as bytes
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemoryStats {
     pub physical_memory: PhysicalMem,
     pub swap: Swap,
@@ -10,14 +10,14 @@ pub struct MemoryStats {
     pub zswap: Option<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PhysicalMem {
     pub total: u64,
     pub available: u64,
     pub used: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Swap {
     pub total: u64,
     pub used: u64,

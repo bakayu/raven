@@ -2,7 +2,7 @@ use procfs::{CpuTime, CurrentSI, KernelStats};
 
 /// CpuStats contains the CPU usage, stored as percentage of total.
 /// Derived from the delta of CpuTime between 2 ticks with CpuSampler.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CpuStats {
     pub total: f64,
     pub per_core: Vec<f64>,
