@@ -147,3 +147,92 @@ fn compute_total_rate(interfaces: &[InterfaceNetworkRate]) -> NetworkRate {
         rx_bytes_per_sec: total_rx,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn include_interface_filters_noise() {
+        assert!(!should_include_interface("lo"));
+        assert!(!should_include_interface("docker0"));
+        assert!(!should_include_interface("veth123"));
+        assert!(!should_include_interface("cni0"));
+        assert!(should_include_interface("eth0"));
+        assert!(should_include_interface("ens18"));
+    }
+
+    #[test]
+    fn compute_interface_rates_uses_deltas() {
+        let prev = HashMap::from([(
+            "eth0".to_string(),
+            InterfaceCounters {
+                tx_bytes: 1000,
+                rx_bytes: 2000,
+            },
+        )]);
+
+        let cur = HashMap::from([(
+            "eth0".to_string(),
+            InterfaceCounters {
+                tx_bytes: 3000,
+                rx_bytes: 5000,
+            },
+        )]);
+
+        let rates = compute_interface_rates(&prev, &cur, 2.0);
+        assert_eq!(rates.len(), 1);
+        assert_eq!(rates[0].name, "eth0");
+        assert_eq!(rates[0].rate.tx_bytes_per_sec, 1000.0);
+        assert_eq!(rates[0].rate.rx_bytes_per_sec, 1500.0);
+    }
+
+    #[test]
+    fn compute_interface_rates_saturates_on_counter_reset() {
+        let prev = HashMap::from([(
+            "eth0".to_string(),
+            InterfaceCounters {
+                tx_bytes: 5000,
+                rx_bytes: 6000,
+            },
+        )]);
+
+        let cur = HashMap::from([(
+            "eth0".to_string(),
+            InterfaceCounters {
+                tx_bytes: 1000,
+                rx_bytes: 1000,
+            },
+        )]);
+
+        let rates = compute_interface_rates(&prev, &cur, 1.0);
+        assert_eq!(rates.len(), 1);
+        assert_eq!(rates[0].rate.tx_bytes_per_sec, 0.0);
+        assert_eq!(rates[0].rate.rx_bytes_per_sec, 0.0);
+    }
+
+    #[test]
+    fn compute_total_rate_sums_interfaces() {
+        let interfaces = vec![
+            InterfaceNetworkRate {
+                name: "eth0".to_string(),
+                rate: NetworkRate {
+                    tx_bytes_per_sec: 10.0,
+                    rx_bytes_per_sec: 20.0,
+                },
+            },
+            InterfaceNetworkRate {
+                name: "eth1".to_string(),
+                rate: NetworkRate {
+                    tx_bytes_per_sec: 5.0,
+                    rx_bytes_per_sec: 7.0,
+                },
+            },
+        ];
+
+        let total = compute_total_rate(&interfaces);
+        assert_eq!(total.tx_bytes_per_sec, 15.0);
+        assert_eq!(total.rx_bytes_per_sec, 27.0);
+    }
+}

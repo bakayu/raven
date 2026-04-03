@@ -140,3 +140,103 @@ impl AgentConfig {
         Ok(cfg.try_deserialize()?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use secrecy::ExposeSecret;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_file(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!("{}_{}_{}.toml", name, std::process::id(), nanos))
+    }
+
+    #[test]
+    fn load_uses_defaults_when_file_missing() {
+        let path = temp_file("raven_agent_missing");
+        let cfg = AgentConfig::load(&path).expect("config should load defaults");
+
+        assert_eq!(cfg.server.address, "127.0.0.1:9090");
+        assert_eq!(cfg.server.token.expose_secret(), "");
+        assert!(cfg.server.tls);
+
+        assert_eq!(cfg.metrics.interval_seconds, 10);
+
+        assert_eq!(cfg.transport.batch_size, 100);
+        assert_eq!(cfg.transport.flush_interval_seconds, 5);
+        assert_eq!(cfg.transport.retry_max_interval_seconds, 60);
+        assert_eq!(cfg.transport.wal_max_size_mb, 100);
+        assert_eq!(cfg.transport.heartbeat_interval_seconds, 30);
+        assert_eq!(cfg.transport.channel_capacity, 256);
+
+        assert_eq!(cfg.logging.level, "info");
+        assert_eq!(cfg.logging.service_name, "raven-agent");
+        assert!(cfg.logs.is_empty());
+    }
+
+    #[test]
+    fn load_reads_values_from_toml() {
+        let path = temp_file("raven_agent_values");
+
+        let toml = r#"
+[server]
+address = "10.1.2.3:9090"
+token = "rvn_test"
+tls = false
+
+[metrics]
+interval_seconds = 3
+
+[transport]
+batch_size = 7
+flush_interval_seconds = 2
+retry_max_interval_seconds = 8
+wal_max_size_mb = 11
+heartbeat_interval_seconds = 4
+channel_capacity = 9
+
+[logging]
+level = "debug"
+service_name = "agent-test"
+
+[[logs]]
+name = "nginx"
+path = "/var/log/nginx/access.log"
+format = "plain"
+"#;
+
+        fs::write(&path, toml).expect("write test config");
+
+        let cfg = AgentConfig::load(&path).expect("config should load from file");
+
+        assert_eq!(cfg.server.address, "10.1.2.3:9090");
+        assert_eq!(cfg.server.token.expose_secret(), "rvn_test");
+        assert!(!cfg.server.tls);
+
+        assert_eq!(cfg.metrics.interval_seconds, 3);
+
+        assert_eq!(cfg.transport.batch_size, 7);
+        assert_eq!(cfg.transport.flush_interval_seconds, 2);
+        assert_eq!(cfg.transport.retry_max_interval_seconds, 8);
+        assert_eq!(cfg.transport.wal_max_size_mb, 11);
+        assert_eq!(cfg.transport.heartbeat_interval_seconds, 4);
+        assert_eq!(cfg.transport.channel_capacity, 9);
+
+        assert_eq!(cfg.logging.level, "debug");
+        assert_eq!(cfg.logging.service_name, "agent-test");
+
+        assert_eq!(cfg.logs.len(), 1);
+        assert_eq!(cfg.logs[0].name, "nginx");
+        assert_eq!(cfg.logs[0].path, "/var/log/nginx/access.log");
+        assert!(matches!(cfg.logs[0].format, LogFormat::Plain));
+
+        let _ = fs::remove_file(path);
+    }
+}

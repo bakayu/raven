@@ -51,3 +51,42 @@ impl MemoryStats {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn collect_returns_consistent_memory_values() {
+        let stats = MemoryStats::collect()
+            .await
+            .expect("memory collect should succeed");
+
+        assert!(stats.physical_memory.available <= stats.physical_memory.total);
+        assert_eq!(
+            stats.physical_memory.used,
+            stats
+                .physical_memory
+                .total
+                .saturating_sub(stats.physical_memory.available)
+        );
+
+        assert!(stats.swap.used <= stats.swap.total);
+    }
+
+    #[tokio::test]
+    async fn collect_can_be_called_multiple_times() {
+        let a = MemoryStats::collect()
+            .await
+            .expect("first collect should succeed");
+        let b = MemoryStats::collect()
+            .await
+            .expect("second collect should succeed");
+
+        assert!(a.physical_memory.total > 0 || b.physical_memory.total > 0);
+        assert!(a.physical_memory.used <= a.physical_memory.total);
+        assert!(b.physical_memory.used <= b.physical_memory.total);
+        assert!(a.swap.used <= a.swap.total);
+        assert!(b.swap.used <= b.swap.total);
+    }
+}
