@@ -95,3 +95,32 @@ fn cpu_time_delta(cur_cpu_time: &CpuTime, prev: &CpuTime) -> f64 {
 fn clamp(num: f64) -> f64 {
     f64::clamp(num, 0f64, 100f64)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_bounds_values() {
+        assert_eq!(clamp(-1.0), 0.0);
+        assert_eq!(clamp(42.5), 42.5);
+        assert_eq!(clamp(120.0), 100.0);
+    }
+
+    #[tokio::test]
+    async fn sampler_returns_none_first_then_some() {
+        let mut sampler = CpuSampler::new();
+
+        let first = sampler.sample().await.expect("first sample should succeed");
+        assert!(first.is_none());
+
+        let second = sampler
+            .sample()
+            .await
+            .expect("second sample should succeed");
+        assert!(second.is_some());
+
+        let stats = second.expect("expected stats on second call");
+        assert!((0.0..=100.0).contains(&stats.total));
+    }
+}

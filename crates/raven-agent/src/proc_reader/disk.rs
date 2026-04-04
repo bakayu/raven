@@ -385,3 +385,84 @@ fn hash_inventory(inventory: &DiskInventory) -> u64 {
 
     hasher.finish()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_physical_device_filters_expected_names() {
+        assert!(is_physical_device("sda"));
+        assert!(is_physical_device("xvda"));
+        assert!(is_physical_device("nvme0n1"));
+        assert!(is_physical_device("mmcblk0"));
+
+        assert!(!is_physical_device("sda1"));
+        assert!(!is_physical_device("nvme0n1p1"));
+        assert!(!is_physical_device("mmcblk0p1"));
+        assert!(!is_physical_device("loop0"));
+        assert!(!is_physical_device("dm-0"));
+        assert!(!is_physical_device("zram0"));
+        assert!(!is_physical_device("md0"));
+    }
+
+    #[test]
+    fn parse_parent_from_device_name_handles_common_patterns() {
+        assert_eq!(parse_parent_from_device_name("nvme0n1p2"), "nvme0n1");
+        assert_eq!(parse_parent_from_device_name("mmcblk0p1"), "mmcblk0");
+        assert_eq!(parse_parent_from_device_name("sda1"), "sda");
+        assert_eq!(parse_parent_from_device_name("vda"), "vda");
+    }
+
+    #[test]
+    fn should_include_mount_applies_filters() {
+        assert!(should_include_mount("ext4", "/dev/sda1", Path::new("/")));
+        assert!(!should_include_mount("proc", "/proc", Path::new("/proc")));
+        assert!(!should_include_mount("tmpfs", "tmpfs", Path::new("/run")));
+        assert!(!should_include_mount(
+            "overlay",
+            "/dev/sda1",
+            Path::new("/")
+        ));
+    }
+
+    #[test]
+    fn calc_used_percent_handles_edge_cases() {
+        assert_eq!(calc_used_percent(0, 0), 0.0);
+        assert_eq!(calc_used_percent(50, 100), 50.0);
+        assert_eq!(calc_used_percent(150, 100), 100.0);
+    }
+
+    #[test]
+    fn hash_inventory_changes_when_content_changes() {
+        let a = DiskInventory {
+            filesystems: vec![FilesystemInventory {
+                source: "/dev/sda1".to_string(),
+                parent_device: Some("sda".to_string()),
+                fs_type: "ext4".to_string(),
+                mount_points: vec!["/".to_string()],
+            }],
+        };
+
+        let b = DiskInventory {
+            filesystems: vec![FilesystemInventory {
+                source: "/dev/sda1".to_string(),
+                parent_device: Some("sda".to_string()),
+                fs_type: "ext4".to_string(),
+                mount_points: vec!["/".to_string()],
+            }],
+        };
+
+        let c = DiskInventory {
+            filesystems: vec![FilesystemInventory {
+                source: "/dev/sda1".to_string(),
+                parent_device: Some("sda".to_string()),
+                fs_type: "ext4".to_string(),
+                mount_points: vec!["/".to_string(), "/var".to_string()],
+            }],
+        };
+
+        assert_eq!(hash_inventory(&a), hash_inventory(&b));
+        assert_ne!(hash_inventory(&a), hash_inventory(&c));
+    }
+}

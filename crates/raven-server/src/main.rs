@@ -126,3 +126,73 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost_types::Timestamp;
+    use raven_proto::proto::raven_ingestion_server::RavenIngestion;
+    use tonic::{Code, Request};
+
+    #[tokio::test]
+    async fn register_rejects_missing_identity() {
+        let server = RavenServer::default();
+        let req = RegisterRequest {
+            agent_id: "".to_string(),
+            hostname: "".to_string(),
+            os: "linux".to_string(),
+            agent_version: "0.1.0".to_string(),
+            log_files: vec![],
+        };
+
+        let err = server.register(Request::new(req)).await.unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_rejects_missing_timestamp() {
+        let server = RavenServer::default();
+        let req = HeartbeatRequest {
+            agent_id: "a1".to_string(),
+            hostname: "host1".to_string(),
+            sent_at: None,
+        };
+
+        let err = server.heartbeat(Request::new(req)).await.unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_accepts_valid_timestamp() {
+        let server = RavenServer::default();
+        let req = HeartbeatRequest {
+            agent_id: "a1".to_string(),
+            hostname: "host1".to_string(),
+            sent_at: Some(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+        };
+
+        let resp = server
+            .heartbeat(Request::new(req))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(resp.ok);
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_rejects_missing_timestamp() {
+        let server = RavenServer::default();
+        let req = MetricBatch {
+            agent_id: "a1".to_string(),
+            hostname: "host1".to_string(),
+            sent_at: None,
+            ..Default::default()
+        };
+
+        let err = server.ingest_metrics(Request::new(req)).await.unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+}
