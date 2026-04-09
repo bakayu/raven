@@ -1,7 +1,10 @@
 ![raven](./docs/raven-logo-horizontal-full-light.png)
 
+<div align="center">
+
 [![CI](https://github.com/rvnhq/raven/actions/workflows/ci.yml/badge.svg)](https://github.com/rvnhq/raven/actions/workflows/ci.yml) [![build](https://github.com/rvnhq/raven/actions/workflows/build.yml/badge.svg)](https://github.com/rvnhq/raven/actions/workflows/build.yml) [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE) [![Release](https://img.shields.io/github/v/release/rvnhq/raven?display_name=tag&sort=semver)](https://github.com/rvnhq/raven/releases)
 
+</div>
 
 > [!CAUTION]
 > The project is currently under development.
