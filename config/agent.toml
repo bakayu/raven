@@ -17,3 +17,20 @@ channel_capacity = 256
 [logging]
 level = "info"
 service_name = "raven-agent"
+
+[[logs]]
+name = "app-out"
+path = "/tmp/raven-log-reader/app-out.log"
+format = "plain"
+stream = "stdout"
+
+[[logs]]
+name = "app-error"
+path = "/tmp/raven-log-reader/app-error.log"
+format = "plain"
+stream = "stderr"
+
+[[logs]]
+name = "docker-json"
+path = "/tmp/raven-log-reader/docker-json.log"
+format = "docker-json"

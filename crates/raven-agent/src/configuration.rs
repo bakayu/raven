@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use anyhow::bail;
 use config::{Config, Environment, File};
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -52,6 +53,7 @@ pub struct LogSource {
     pub name: String,
     pub path: String,
     pub format: LogFormat,
+    pub stream: Option<Stream>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -60,6 +62,13 @@ pub enum LogFormat {
     #[default]
     Plain,
     DockerJson,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Stream {
+    Stdout,
+    Stderr,
 }
 
 impl Default for ServerConfig {
@@ -108,6 +117,7 @@ impl Default for LogSource {
             name: String::new(),
             path: String::new(),
             format: LogFormat::Plain,
+            stream: None,
         }
     }
 }
@@ -137,7 +147,31 @@ impl AgentConfig {
             )
             .build()?;
 
-        Ok(cfg.try_deserialize()?)
+        let cfg: AgentConfig = cfg.try_deserialize()?;
+        cfg.validate()?;
+
+        Ok(cfg)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        for source in &self.logs {
+            if source.name.trim().is_empty() {
+                bail!("log source name cannot be empty");
+            }
+
+            if source.path.trim().is_empty() {
+                bail!("log source '{}' path cannot be empty", source.name);
+            }
+
+            if matches!(source.format, LogFormat::Plain) && source.stream.is_none() {
+                bail!(
+                    "log source '{}' with format=plain requires stream=stdout or stream=stderr",
+                    source.name
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -210,6 +244,7 @@ service_name = "agent-test"
 name = "nginx"
 path = "/var/log/nginx/access.log"
 format = "plain"
+stream = "stdout"
 "#;
 
         fs::write(&path, toml).expect("write test config");
@@ -236,6 +271,47 @@ format = "plain"
         assert_eq!(cfg.logs[0].name, "nginx");
         assert_eq!(cfg.logs[0].path, "/var/log/nginx/access.log");
         assert!(matches!(cfg.logs[0].format, LogFormat::Plain));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_rejects_plain_log_without_stream() {
+        let path = temp_file("raven_agent_plain_without_stream");
+
+        let toml = r#"
+[[logs]]
+name = "nginx"
+path = "/var/log/nginx/access.log"
+format = "plain"
+"#;
+
+        fs::write(&path, toml).expect("write test config");
+        let err = AgentConfig::load(&path).expect_err("plain log without stream should fail");
+        assert!(
+            err.to_string().contains("requires stream"),
+            "unexpected error: {}",
+            err
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_allows_docker_json_without_stream() {
+        let path = temp_file("raven_agent_docker_without_stream");
+
+        let toml = r#"
+[[logs]]
+name = "my-api"
+path = "/var/lib/docker/containers/abc/abc-json.log"
+format = "docker-json"
+"#;
+
+        fs::write(&path, toml).expect("write test config");
+        let cfg = AgentConfig::load(&path).expect("docker-json without stream should be allowed");
+        assert_eq!(cfg.logs.len(), 1);
+        assert!(cfg.logs[0].stream.is_none());
 
         let _ = fs::remove_file(path);
     }
