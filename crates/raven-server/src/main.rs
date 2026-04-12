@@ -4,8 +4,8 @@ use tracing::{debug, info};
 
 use raven_proto::proto::raven_ingestion_server::{RavenIngestion, RavenIngestionServer};
 use raven_proto::proto::{
-    HeartbeatRequest, HeartbeatResponse, MetricBatch, RegisterRequest, RegisterResponse,
-    StreamResponse,
+    HeartbeatRequest, HeartbeatResponse, LogBatch, LogStream as ProtoLogStream, MetricBatch,
+    RegisterRequest, RegisterResponse, StreamResponse,
 };
 use raven_server::init_subscriber;
 
@@ -79,6 +79,69 @@ impl RavenIngestion for RavenServer {
         Ok(Response::new(StreamResponse {
             ok: true,
             message: "metrics accepted".to_string(),
+        }))
+    }
+
+    async fn ingest_logs(
+        &self,
+        request: Request<LogBatch>,
+    ) -> Result<Response<StreamResponse>, Status> {
+        let batch = request.into_inner();
+
+        if batch.agent_id.trim().is_empty()
+            || batch.hostname.trim().is_empty()
+            || batch.source.trim().is_empty()
+        {
+            return Err(Status::invalid_argument(
+                "agent_id, hostname and source are required",
+            ));
+        }
+
+        let sent_at = batch
+            .sent_at
+            .ok_or_else(|| Status::invalid_argument("missing sent_at"))?;
+
+        let date_time = Utc
+            .timestamp_opt(sent_at.seconds, sent_at.nanos as u32)
+            .single()
+            .ok_or_else(|| Status::invalid_argument("invalid sent_at timestamp"))?;
+
+        let stdout_count = batch
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    ProtoLogStream::try_from(e.stream),
+                    Ok(ProtoLogStream::Stdout)
+                )
+            })
+            .count();
+
+        let stderr_count = batch
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    ProtoLogStream::try_from(e.stream),
+                    Ok(ProtoLogStream::Stderr)
+                )
+            })
+            .count();
+
+        info!(
+            agent_id = %batch.agent_id,
+            hostname = %batch.hostname,
+            source = %batch.source,
+            entries = batch.entries.len(),
+            stdout_entries = stdout_count,
+            stderr_entries = stderr_count,
+            sent_at = %date_time,
+            "logs batch received"
+        );
+
+        Ok(Response::new(StreamResponse {
+            ok: true,
+            message: "logs accepted".to_string(),
         }))
     }
 
@@ -194,5 +257,52 @@ mod tests {
 
         let err = server.ingest_metrics(Request::new(req)).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn ingest_logs_rejects_missing_timestamp() {
+        let server = RavenServer::default();
+        let req = LogBatch {
+            agent_id: "a1".to_string(),
+            hostname: "host1".to_string(),
+            source: "app-out".to_string(),
+            sent_at: None,
+            entries: vec![],
+        };
+
+        let err = server.ingest_logs(Request::new(req)).await.unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn ingest_logs_accepts_valid_batch() {
+        let server = RavenServer::default();
+        let req = LogBatch {
+            agent_id: "a1".to_string(),
+            hostname: "host1".to_string(),
+            source: "app-out".to_string(),
+            sent_at: Some(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+            entries: vec![raven_proto::proto::LogEntry {
+                source: "app-out".to_string(),
+                path: "/tmp/app.log".to_string(),
+                line: "hello".to_string(),
+                stream: ProtoLogStream::Stdout as i32,
+                timestamp: Some(Timestamp {
+                    seconds: 1_700_000_000,
+                    nanos: 0,
+                }),
+            }],
+        };
+
+        let resp = server
+            .ingest_logs(Request::new(req))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(resp.ok);
     }
 }

@@ -14,6 +14,9 @@ service RavenIngestion {
   //Mtrics rpc - stream
   // rpc StreamMetrics(stream MetricBatch) returns (StreamResponse);
 
+  // Logs rpc - unary method
+  rpc IngestLogs(LogBatch) returns (StreamResponse);
+
   // rpc StreamLogs(stream LogBatch) returns (StreamResponse);
 
   // Heartbeat method for agents to send periodic updates to the server
@@ -134,6 +137,33 @@ message LoadAverage {
   double one_min = 1;
   double five_min = 2;
   double fifteen_min = 3;
+}
+
+/// Logs
+
+// LogBatch of log log entries sent from the agent to the server
+message LogBatch {
+  string agent_id = 1;
+  string hostname = 2;
+  string source = 3;
+  google.protobuf.Timestamp sent_at = 4;
+  repeated LogEntry entries = 5;
+}
+
+// Single log entry
+message LogEntry {
+  string source = 1;
+  string path = 2;
+  string line = 3;
+  LogStream stream = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+// Enum for log stream type (stdout or stderr)
+enum LogStream {
+  LOG_STREAM_UNSPECIFIED = 0;
+  LOG_STREAM_STDOUT = 1;
+  LOG_STREAM_STDERR = 2;
 }
 
 /// Response

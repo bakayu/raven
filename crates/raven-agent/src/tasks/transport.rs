@@ -7,11 +7,12 @@ use tracing::{debug, info, warn};
 
 use raven_proto::proto::raven_ingestion_client::RavenIngestionClient;
 use raven_proto::proto::{
-    CpuMetrics, DeviceIoMetrics, FilesystemMetrics, HeartbeatRequest, LoadAverage, MemoryMetrics,
-    MetricBatch, NetworkInterfaceMetrics, NetworkTotals, RegisterRequest,
+    CpuMetrics, DeviceIoMetrics, FilesystemMetrics, HeartbeatRequest, LoadAverage,
+    LogBatch as ProtoLogBatch, LogEntry as ProtoLogEntry, LogStream as ProtoLogStream,
+    MemoryMetrics, MetricBatch, NetworkInterfaceMetrics, NetworkTotals, RegisterRequest,
 };
 
-use crate::{AgentConfig, AgentEvent, StatsSnapshot};
+use crate::{AgentConfig, AgentEvent, LogBatch, LogStream, StatsSnapshot};
 
 pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentConfig>) {
     let max_backoff = Duration::from_secs(cfg.transport.retry_max_interval_seconds.max(1));
@@ -107,6 +108,24 @@ pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentCo
                             }
                             AgentEvent::Inventory(snapshot) => {
                                 debug!(?snapshot, "inventory event queued for transport");
+                            }
+                            AgentEvent::Logs(batch) => {
+                                let request = log_batch_from_snapshot(&agent_id, &hostname, batch);
+
+                                match client.ingest_logs(request).await {
+                                    Ok(response) => {
+                                        let body = response.into_inner();
+                                        if !body.ok {
+                                            warn!(message = %body.message, "logs rejected by server");
+                                        } else {
+                                            debug!("log batch sent");
+                                        }
+                                    }
+                                    Err(err) => {
+                                        warn!(error = %err, "logs send failed; reconnecting");
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -215,5 +234,35 @@ fn metric_batch_from_snapshot(
             five_min: snaphost.loadavg.five,
             fifteen_min: snaphost.loadavg.fifteen,
         }),
+    }
+}
+
+fn to_proto_timestamp(ts: chrono::DateTime<Utc>) -> Timestamp {
+    Timestamp {
+        seconds: ts.timestamp(),
+        nanos: ts.timestamp_subsec_nanos() as i32,
+    }
+}
+
+fn log_batch_from_snapshot(agent_id: &str, hostname: &str, batch: LogBatch) -> ProtoLogBatch {
+    ProtoLogBatch {
+        agent_id: agent_id.to_string(),
+        hostname: hostname.to_string(),
+        source: batch.source,
+        sent_at: Some(to_proto_timestamp(Utc::now())),
+        entries: batch
+            .entries
+            .into_iter()
+            .map(|entry| ProtoLogEntry {
+                source: entry.source,
+                path: entry.path.display().to_string(),
+                line: entry.line,
+                stream: match entry.stream {
+                    LogStream::Stdout => ProtoLogStream::Stdout as i32,
+                    LogStream::Stderr => ProtoLogStream::Stderr as i32,
+                },
+                timestamp: Some(to_proto_timestamp(entry.timestamp)),
+            })
+            .collect(),
     }
 }

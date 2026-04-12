@@ -3,9 +3,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-use crate::{AgentConfig, LogTailer};
+use crate::{AgentConfig, AgentEvent, LogTailer};
 
-pub async fn logs_task(cfg: Arc<AgentConfig>) {
+pub async fn logs_task(tx_events: mpsc::Sender<AgentEvent>, cfg: Arc<AgentConfig>) {
     if cfg.logs.is_empty() {
         info!("logs task disabled: no log sources configured");
         return;
@@ -25,20 +25,25 @@ pub async fn logs_task(cfg: Arc<AgentConfig>) {
 
     while let Some(batch) = rx.recv().await {
         info!(
-        source = %batch.source,
-        entries = batch.entries.len(),
-        "log batch captured"
+            source = %batch.source,
+            entries = batch.entries.len(),
+            "log batch captured"
         );
 
-        for entry in batch.entries {
+        for entry in &batch.entries {
             debug!(
-            source = %entry.source,
-            path = %entry.path.display(),
-            stream = ?entry.stream,
-            timestamp = %entry.timestamp.to_rfc3339(),
-            line = %entry.line,
-            "log entry captured"
+                source = %entry.source,
+                path = %entry.path.display(),
+                stream = ?entry.stream,
+                timestamp = %entry.timestamp.to_rfc3339(),
+                line = %entry.line,
+                "log entry captured"
             );
+        }
+
+        if tx_events.send(AgentEvent::Logs(batch)).await.is_err() {
+            error!("transport channel closed, stopping logs task");
+            break;
         }
     }
 
