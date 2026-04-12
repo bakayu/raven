@@ -97,7 +97,7 @@ mod tests {
                 .append(true)
                 .open(&path)
                 .expect("open appender");
-            write!(appender, "line2\n").expect("append line");
+            writeln!(appender, "line2").expect("append line");
             appender.sync_all().expect("sync append");
         }
 

@@ -14,9 +14,12 @@ rustix = { workspace = true }
 tonic = { workspace = true }
 prost-types = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
+inotify = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 config = { workspace = true }
+glob = { workspace = true }
 clap = { workspace = true }
 secrecy = { workspace = true }
 tracing = { workspace = true }
