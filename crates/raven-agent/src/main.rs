@@ -1,12 +1,9 @@
 use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
-use tokio::sync::mpsc;
 use tracing::info;
 
-use raven_agent::{
-    AgentConfig, collector_task, heartbeat_task, init_subscriber, logs_task, transport_task,
-};
+use raven_agent::{AgentConfig, init_subscriber, run_agent};
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -29,19 +26,5 @@ async fn main() -> anyhow::Result<()> {
         "agent starting"
     );
 
-    let (tx, rx) = mpsc::channel(cfg.transport.channel_capacity);
-
-    let heartbeat_task_handle = tokio::spawn(heartbeat_task(tx.clone(), cfg.clone()));
-    let collector_task_handle = tokio::spawn(collector_task(tx.clone(), cfg.clone()));
-    let transport_task_handle = tokio::spawn(transport_task(rx, cfg.clone()));
-    let logs_task_handle = tokio::spawn(logs_task(tx.clone(), cfg.clone()));
-
-    tokio::try_join!(
-        heartbeat_task_handle,
-        collector_task_handle,
-        transport_task_handle,
-        logs_task_handle
-    )?;
-
-    Ok(())
+    run_agent(cfg).await
 }
