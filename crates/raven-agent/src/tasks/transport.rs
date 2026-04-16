@@ -1,8 +1,11 @@
-use std::{sync::Arc, time::Duration};
+use std::{fs, sync::Arc, time::Duration};
 
+use anyhow::{Context, anyhow, bail};
 use chrono::Utc;
 use prost_types::Timestamp;
+use secrecy::ExposeSecret;
 use tokio::sync::mpsc;
+use tonic::{Request, metadata::MetadataValue, transport::Channel};
 use tracing::{debug, info, warn};
 
 use raven_proto::proto::raven_ingestion_client::RavenIngestionClient;
@@ -14,63 +17,55 @@ use raven_proto::proto::{
 
 use crate::{AgentConfig, AgentEvent, LogBatch, LogStream, StatsSnapshot};
 
+#[derive(Debug, Clone)]
+struct AgentIdentity {
+    agent_id: String,
+    hostname: String,
+    os: String,
+    agent_version: String,
+    log_files: Vec<String>,
+}
+
 pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentConfig>) {
     let max_backoff = Duration::from_secs(cfg.transport.retry_max_interval_seconds.max(1));
     let mut backoff = Duration::from_secs(1);
 
-    loop {
-        let endpoint = format!("http://{}", cfg.server.address);
+    let identity = build_identity(&cfg);
+    let bearer_token = cfg.server.token.expose_secret().to_string();
 
-        match RavenIngestionClient::connect(endpoint.clone()).await {
+    loop {
+        match connect_client(&cfg).await {
             Ok(mut client) => {
                 info!(server = %cfg.server.address, "transport connected");
-                backoff = Duration::from_secs(1);
 
-                let hostname = hostname::get()
-                    .ok()
-                    .map(|v| v.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                // TODO: agent_id is same as hostname for now, should be changed to some
-                // form of UUID later.
-                let agent_id = hostname.clone();
-
-                let register_request = RegisterRequest {
-                    agent_id: agent_id.clone(),
-                    hostname: hostname.clone(),
-                    os: std::env::consts::OS.to_string(),
-                    agent_version: env!("CARGO_PKG_VERSION").to_string(),
-                    log_files: cfg.logs.iter().map(|l| l.path.clone()).collect(),
-                };
-
-                let register_ok = match client.register(register_request).await {
-                    Ok(response) => {
-                        let body = response.into_inner();
-                        if body.ok {
-                            info!(agent_id = %agent_id, hostname = %hostname, "register successful");
-                            true
-                        } else {
-                            warn!(message = %body.message, "register failed");
-                            false
-                        }
+                let registered = match register_agent(&mut client, &identity, &bearer_token).await {
+                    Ok(()) => {
+                        info!(
+                            agent_id = %identity.agent_id,
+                            hostname = %identity.hostname,
+                            "register successful"
+                        );
+                        true
                     }
                     Err(err) => {
-                        warn!(error = %err, "register send failed");
+                        warn!(
+                            error = %err,
+                            retry_seconds = backoff.as_secs(),
+                            "register failed; reconnecting after backoff"
+                        );
                         false
                     }
                 };
 
-                if !register_ok {
-                    warn!(
-                        retry_seconds = backoff.as_secs(),
-                        "register not accepted; backing off before reconnect",
-                    );
-                } else {
+                if registered {
+                    backoff = Duration::from_secs(1);
+
                     while let Some(event) = rx.recv().await {
                         match event {
                             AgentEvent::Heartbeat { agent_id, hostname } => {
                                 let now = Utc::now();
 
-                                let request = HeartbeatRequest {
+                                let payload = HeartbeatRequest {
                                     agent_id,
                                     hostname,
                                     sent_at: Some(Timestamp {
@@ -79,17 +74,33 @@ pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentCo
                                     }),
                                 };
 
-                                if let Err(error_value) = client.heartbeat(request).await {
-                                    warn!(error = %error_value, "heartbeat send failed; reconnecting");
+                                let request = match auth_request(payload, &bearer_token) {
+                                    Ok(request) => request,
+                                    Err(err) => {
+                                        warn!(error = %err, "failed to build heartbeat request");
+                                        break;
+                                    }
+                                };
+
+                                if let Err(err) = client.heartbeat(request).await {
+                                    warn!(error = %err, "heartbeat send failed; reconnecting");
                                     break;
                                 }
                             }
                             AgentEvent::Metrics(snapshot) => {
-                                let request = metric_batch_from_snapshot(
-                                    &agent_id,
-                                    &hostname,
+                                let payload = metric_batch_from_snapshot(
+                                    &identity.agent_id,
+                                    &identity.hostname,
                                     snapshot.clone(),
                                 );
+
+                                let request = match auth_request(payload, &bearer_token) {
+                                    Ok(request) => request,
+                                    Err(err) => {
+                                        warn!(error = %err, "failed to build metrics request");
+                                        break;
+                                    }
+                                };
 
                                 match client.ingest_metrics(request).await {
                                     Ok(response) => {
@@ -110,7 +121,19 @@ pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentCo
                                 debug!(?snapshot, "inventory event queued for transport");
                             }
                             AgentEvent::Logs(batch) => {
-                                let request = log_batch_from_snapshot(&agent_id, &hostname, batch);
+                                let payload = log_batch_from_snapshot(
+                                    &identity.agent_id,
+                                    &identity.hostname,
+                                    batch,
+                                );
+
+                                let request = match auth_request(payload, &bearer_token) {
+                                    Ok(request) => request,
+                                    Err(err) => {
+                                        warn!(error = %err, "failed to build logs request");
+                                        break;
+                                    }
+                                };
 
                                 match client.ingest_logs(request).await {
                                     Ok(response) => {
@@ -136,9 +159,9 @@ pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentCo
                     }
                 }
             }
-            Err(error_value) => {
+            Err(err) => {
                 warn!(
-                    error = %error_value,
+                    error = %err,
                     server = %cfg.server.address,
                     retry_seconds = backoff.as_secs(),
                     "transport connect failed"
@@ -151,7 +174,87 @@ pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentCo
     }
 }
 
-/// Map `MetricBatch` from `StatsSnapshot`
+fn build_identity(cfg: &AgentConfig) -> AgentIdentity {
+    let hostname = hostname::get()
+        .ok()
+        .map(|v| v.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let agent_id = read_machine_id().unwrap_or_else(|| hostname.clone());
+
+    AgentIdentity {
+        agent_id,
+        hostname,
+        os: std::env::consts::OS.to_string(),
+        agent_version: env!("CARGO_PKG_VERSION").to_string(),
+        log_files: cfg.logs.iter().map(|source| source.path.clone()).collect(),
+    }
+}
+
+fn read_machine_id() -> Option<String> {
+    for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
+        if let Ok(contents) = fs::read_to_string(path) {
+            let id = contents.trim().to_string();
+            if !id.is_empty() {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+fn build_register_request(identity: &AgentIdentity) -> RegisterRequest {
+    RegisterRequest {
+        agent_id: identity.agent_id.clone(),
+        hostname: identity.hostname.clone(),
+        os: identity.os.clone(),
+        agent_version: identity.agent_version.clone(),
+        log_files: identity.log_files.clone(),
+    }
+}
+
+fn auth_request<T>(payload: T, bearer_token: &str) -> anyhow::Result<Request<T>> {
+    let mut request = Request::new(payload);
+    let header = MetadataValue::try_from(format!("Bearer {bearer_token}"))
+        .context("invalid authorization metadata value")?;
+    request.metadata_mut().insert("authorization", header);
+    Ok(request)
+}
+
+async fn connect_client(cfg: &AgentConfig) -> anyhow::Result<RavenIngestionClient<Channel>> {
+    let scheme = if cfg.server.tls { "https" } else { "http" };
+    let endpoint = format!("{scheme}://{}", cfg.server.address);
+
+    let channel = tonic::transport::Endpoint::from_shared(endpoint.clone())
+        .with_context(|| format!("invalid server endpoint: {endpoint}"))?
+        .connect()
+        .await
+        .with_context(|| format!("failed to connect to {}", cfg.server.address))?;
+
+    Ok(RavenIngestionClient::new(channel))
+}
+
+async fn register_agent(
+    client: &mut RavenIngestionClient<Channel>,
+    identity: &AgentIdentity,
+    bearer_token: &str,
+) -> anyhow::Result<()> {
+    let request = auth_request(build_register_request(identity), bearer_token)?;
+
+    let response = tokio::time::timeout(Duration::from_secs(5), client.register(request))
+        .await
+        .map_err(|_| anyhow!("register timed out"))??;
+
+    let body = response.into_inner();
+
+    if !body.ok {
+        bail!("register rejected: {}", body.message);
+    }
+
+    Ok(())
+}
+
+/// Map MetricBatch from StatsSnapshot
 fn metric_batch_from_snapshot(
     agent_id: &str,
     hostname: &str,
@@ -264,5 +367,44 @@ fn log_batch_from_snapshot(agent_id: &str, hostname: &str, batch: LogBatch) -> P
                 timestamp: Some(to_proto_timestamp(entry.timestamp)),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_register_request_maps_fields() {
+        let identity = AgentIdentity {
+            agent_id: "machine-123".to_string(),
+            hostname: "host-a".to_string(),
+            os: "linux".to_string(),
+            agent_version: "0.1.0".to_string(),
+            log_files: vec!["/var/log/app.log".to_string()],
+        };
+
+        let req = build_register_request(&identity);
+
+        assert_eq!(req.agent_id, "machine-123");
+        assert_eq!(req.hostname, "host-a");
+        assert_eq!(req.os, "linux");
+        assert_eq!(req.agent_version, "0.1.0");
+        assert_eq!(req.log_files, vec!["/var/log/app.log"]);
+    }
+
+    #[test]
+    fn auth_request_sets_bearer_metadata() {
+        let request = auth_request(RegisterRequest::default(), "rvn_test_token")
+            .expect("request with auth should be built");
+
+        let value = request
+            .metadata()
+            .get("authorization")
+            .expect("authorization metadata");
+        assert_eq!(
+            value.to_str().expect("metadata to str"),
+            "Bearer rvn_test_token"
+        );
     }
 }
