@@ -1,4 +1,4 @@
-use std::{fs, sync::Arc, time::Duration};
+use std::{fs, path::Path, sync::Arc, time::Duration};
 
 use anyhow::{Context, anyhow, bail};
 use chrono::Utc;
@@ -16,6 +16,11 @@ use raven_proto::proto::{
 };
 
 use crate::{AgentConfig, AgentEvent, LogBatch, LogStream, StatsSnapshot};
+
+/// Path where the `agent_id` is stored on the system.
+///
+/// For persistence, we are storing the agent_id in a file.
+pub const AGENT_ID_PATH: &str = "/var/lib/raven/agent-id";
 
 #[derive(Debug, Clone)]
 struct AgentIdentity {
@@ -180,7 +185,7 @@ fn build_identity(cfg: &AgentConfig) -> AgentIdentity {
         .map(|v| v.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let agent_id = read_machine_id().unwrap_or_else(|| hostname.clone());
+    let agent_id = resolve_agent_id(&hostname);
 
     AgentIdentity {
         agent_id,
@@ -189,6 +194,54 @@ fn build_identity(cfg: &AgentConfig) -> AgentIdentity {
         agent_version: env!("CARGO_PKG_VERSION").to_string(),
         log_files: cfg.logs.iter().map(|source| source.path.clone()).collect(),
     }
+}
+
+fn resolve_agent_id(hostname: &str) -> String {
+    let id_path = Path::new(AGENT_ID_PATH);
+
+    let persisted_uuid =
+        read_persisted_uuid(id_path).or_else(|| generate_and_persist_uuid(id_path));
+
+    persisted_uuid
+        .or(read_machine_id())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| hostname.to_string())
+}
+
+fn read_persisted_uuid(path: &Path) -> Option<String> {
+    let raw = fs::read_to_string(path).ok()?;
+    let trimmed = raw.trim();
+
+    if uuid::Uuid::parse_str(trimmed).is_ok() {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn generate_and_persist_uuid(path: &Path) -> Option<String> {
+    let generated = uuid::Uuid::new_v4().to_string();
+
+    match persist_agent_id(path, &generated) {
+        Ok(()) => Some(generated),
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "failed to persisted generated agent id; falling back"
+            );
+            None
+        }
+    }
+}
+
+fn persist_agent_id(path: &Path, agent_id: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    fs::write(path, format!("{agent_id}\n"))?;
+    Ok(())
 }
 
 fn read_machine_id() -> Option<String> {
@@ -372,7 +425,19 @@ fn log_batch_from_snapshot(agent_id: &str, hostname: &str, batch: LogBatch) -> P
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
+
+    fn unique_temp_path(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!("{prefix}_{}_{}", std::process::id(), nanos))
+    }
 
     #[test]
     fn build_register_request_maps_fields() {
@@ -406,5 +471,16 @@ mod tests {
             value.to_str().expect("metadata to str"),
             "Bearer rvn_test_token"
         );
+    }
+
+    #[test]
+    fn persisted_uuid_round_trip() {
+        let path = unique_temp_path("raven_agent_id");
+        let generated = generate_and_persist_uuid(&path).expect("uuid should be generated");
+        let loaded = read_persisted_uuid(&path).expect("uuid should be readable");
+
+        assert_eq!(generated, loaded);
+
+        let _ = std::fs::remove_file(path);
     }
 }
