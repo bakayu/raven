@@ -15,6 +15,7 @@ target/
 *.pdb
 
 logs/
+.dev/
 
 # Dashboard
 dashboard/node_modules/
