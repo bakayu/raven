@@ -1,0 +1,38 @@
+[server]
+address = "__SERVER_ADDRESS__"
+token = "__TOKEN__"
+tls = __TLS__
+
+[metrics]
+interval_seconds = 10
+
+[transport]
+batch_size = 100
+flush_interval_seconds = 5
+retry_max_interval_seconds = 60
+wal_max_size_mb = 100
+heartbeat_interval_seconds = 30
+channel_capacity = 256
+
+[logging]
+level = "info"
+service_name = "raven-agent"
+
+# # Plain logs require stream = "stdout" or "stderr"
+# [[logs]]
+# name = "app-out"
+# path = "/var/log/my-app/out.log"
+# format = "plain"
+# stream = "stdout"
+
+# [[logs]]
+# name = "app-error"
+# path = "/var/log/my-app/error.log"
+# format = "plain"
+# stream = "stderr"
+
+# # Docker json-file log format
+# [[logs]]
+# name = "docker-json"
+# path = "/var/lib/docker/containers/<container-id>/<container-id>-json.log"
+# format = "docker-json"

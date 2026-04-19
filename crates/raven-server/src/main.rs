@@ -9,8 +9,43 @@ use raven_proto::proto::{
 };
 use raven_server::init_subscriber;
 
-#[derive(Debug, Default)]
-pub struct RavenServer {}
+#[derive(Debug, Clone)]
+pub struct RavenServer {
+    expected_token: String,
+}
+
+impl RavenServer {
+    pub fn new(expected_token: String) -> Self {
+        Self { expected_token }
+    }
+
+    fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
+        let header = request
+            .metadata()
+            .get("authorization")
+            .ok_or_else(|| Status::unauthenticated("missing authorization metadata"))?;
+
+        let value = header
+            .to_str()
+            .map_err(|_| Status::unauthenticated("invalid authorization metadata"))?;
+
+        let token = value
+            .strip_prefix("Bearer ")
+            .ok_or_else(|| Status::unauthenticated("authorization scheme must be Bearer"))?;
+
+        if token != self.expected_token {
+            return Err(Status::unauthenticated("invalid bearer token"));
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for RavenServer {
+    fn default() -> Self {
+        Self::new("rvn_dev_token".to_string())
+    }
+}
 
 #[tonic::async_trait]
 impl RavenIngestion for RavenServer {
@@ -18,16 +53,20 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
+        self.authorize(&request)?;
+
         let request = request.into_inner();
 
-        if request.agent_id.trim().is_empty() || request.hostname.trim().is_empty() {
+        if request.agent_id.trim().is_empty()
+            || request.hostname.trim().is_empty()
+            || request.os.trim().is_empty()
+            || request.agent_version.trim().is_empty()
+        {
             return Err(Status::invalid_argument(
-                "agent_id and hostname are required",
+                "agent_id, hostname, os and agent_version are required",
             ));
         }
 
-        // TODO: currently only logging the info, later this information
-        // should be stored in a db.
         info!(
             agent_id = %request.agent_id,
             hostname = %request.hostname,
@@ -42,11 +81,12 @@ impl RavenIngestion for RavenServer {
             message: "agent registered".to_string(),
         }))
     }
-
     async fn ingest_metrics(
         &self,
         request: Request<MetricBatch>,
     ) -> Result<Response<StreamResponse>, Status> {
+        self.authorize(&request)?;
+
         let batch = request.into_inner();
 
         let sent_at = batch
@@ -86,6 +126,8 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<LogBatch>,
     ) -> Result<Response<StreamResponse>, Status> {
+        self.authorize(&request)?;
+
         let batch = request.into_inner();
 
         if batch.agent_id.trim().is_empty()
@@ -149,6 +191,8 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
+        self.authorize(&request)?;
+
         let request = request.into_inner();
 
         let sent_at = request
@@ -181,7 +225,9 @@ async fn main() -> anyhow::Result<()> {
     init_subscriber("raven-server", "info")?;
 
     let addr = "0.0.0.0:9090".parse()?;
-    let ingestion_server = RavenServer::default();
+    let expected_token =
+        std::env::var("RAVEN_AGENT_TOKEN").unwrap_or_else(|_| "rvn_dev_token".to_string());
+    let ingestion_server = RavenServer::new(expected_token);
     let service = RavenIngestionServer::new(ingestion_server);
 
     info!(listen_addr = %addr, "server starting");
@@ -197,9 +243,36 @@ mod tests {
     use raven_proto::proto::raven_ingestion_server::RavenIngestion;
     use tonic::{Code, Request};
 
+    fn with_auth<T>(payload: T) -> Request<T> {
+        let mut request = Request::new(payload);
+        request.metadata_mut().insert(
+            "authorization",
+            "Bearer rvn_test_token"
+                .parse()
+                .expect("valid metadata value"),
+        );
+        request
+    }
+
+    #[tokio::test]
+    async fn register_rejects_missing_auth() {
+        let server = RavenServer::new("rvn_test_token".to_string());
+
+        let req = RegisterRequest {
+            agent_id: "a1".to_string(),
+            hostname: "host1".to_string(),
+            os: "linux".to_string(),
+            agent_version: "0.1.0".to_string(),
+            log_files: vec![],
+        };
+
+        let err = server.register(Request::new(req)).await.unwrap_err();
+        assert_eq!(err.code(), Code::Unauthenticated);
+    }
+
     #[tokio::test]
     async fn register_rejects_missing_identity() {
-        let server = RavenServer::default();
+        let server = RavenServer::new("rvn_test_token".to_string());
         let req = RegisterRequest {
             agent_id: "".to_string(),
             hostname: "".to_string(),
@@ -208,26 +281,26 @@ mod tests {
             log_files: vec![],
         };
 
-        let err = server.register(Request::new(req)).await.unwrap_err();
+        let err = server.register(with_auth(req)).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
     }
 
     #[tokio::test]
     async fn heartbeat_rejects_missing_timestamp() {
-        let server = RavenServer::default();
+        let server = RavenServer::new("rvn_test_token".to_string());
         let req = HeartbeatRequest {
             agent_id: "a1".to_string(),
             hostname: "host1".to_string(),
             sent_at: None,
         };
 
-        let err = server.heartbeat(Request::new(req)).await.unwrap_err();
+        let err = server.heartbeat(with_auth(req)).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
     }
 
     #[tokio::test]
     async fn heartbeat_accepts_valid_timestamp() {
-        let server = RavenServer::default();
+        let server = RavenServer::new("rvn_test_token".to_string());
         let req = HeartbeatRequest {
             agent_id: "a1".to_string(),
             hostname: "host1".to_string(),
@@ -237,17 +310,13 @@ mod tests {
             }),
         };
 
-        let resp = server
-            .heartbeat(Request::new(req))
-            .await
-            .unwrap()
-            .into_inner();
+        let resp = server.heartbeat(with_auth(req)).await.unwrap().into_inner();
         assert!(resp.ok);
     }
 
     #[tokio::test]
     async fn ingest_metrics_rejects_missing_timestamp() {
-        let server = RavenServer::default();
+        let server = RavenServer::new("rvn_test_token".to_string());
         let req = MetricBatch {
             agent_id: "a1".to_string(),
             hostname: "host1".to_string(),
@@ -255,13 +324,13 @@ mod tests {
             ..Default::default()
         };
 
-        let err = server.ingest_metrics(Request::new(req)).await.unwrap_err();
+        let err = server.ingest_metrics(with_auth(req)).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
     }
 
     #[tokio::test]
     async fn ingest_logs_rejects_missing_timestamp() {
-        let server = RavenServer::default();
+        let server = RavenServer::new("rvn_test_token".to_string());
         let req = LogBatch {
             agent_id: "a1".to_string(),
             hostname: "host1".to_string(),
@@ -270,13 +339,13 @@ mod tests {
             entries: vec![],
         };
 
-        let err = server.ingest_logs(Request::new(req)).await.unwrap_err();
+        let err = server.ingest_logs(with_auth(req)).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
     }
 
     #[tokio::test]
     async fn ingest_logs_accepts_valid_batch() {
-        let server = RavenServer::default();
+        let server = RavenServer::new("rvn_test_token".to_string());
         let req = LogBatch {
             agent_id: "a1".to_string(),
             hostname: "host1".to_string(),
@@ -298,7 +367,7 @@ mod tests {
         };
 
         let resp = server
-            .ingest_logs(Request::new(req))
+            .ingest_logs(with_auth(req))
             .await
             .unwrap()
             .into_inner();

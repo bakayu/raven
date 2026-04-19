@@ -1,7 +1,7 @@
 [server]
 address = "127.0.0.1:9090"
 token = "rvn_dev_token"
-tls = true
+tls = false
 
 [metrics]
 interval_seconds = 10
