@@ -35,7 +35,20 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - name: Build raven-agent
+      - name: Install aarch64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Build raven-agent (x86_64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo build --release -p raven-agent --target ${{ matrix.target }}
+
+      - name: Build raven-agent (aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        env:
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+            CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+            AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
         run: cargo build --release -p raven-agent --target ${{ matrix.target }}
 
       - name: Package binary
@@ -62,12 +75,9 @@ jobs:
       - name: Download built binaries
         uses: actions/download-artifact@v4
         with:
-          path: dist
-
-      - name: Flatten artifact layout
-        run: |
-          find dist -type f -name "raven-agent-*" -exec mv {} dist/ \;
-          find dist -type d -empty -delete
+            pattern: raven-agent-*
+            path: dist
+            merge-multiple: true
 
       - name: Add installer and config template
         run: |
