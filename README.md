@@ -45,14 +45,17 @@ todo!()
 
 **2. Install the agent on any server you want to monitor:**
 
-<!-- ```bash
-curl -sSL https://github.com/bakayu/raven/releases/latest/download/install.sh | sudo sh -s -- \
-  --server your-server-ip:9090 \
-  --token rvn_your_token_here
-``` -->
+Use this for the latest release:
 
-```rs
-todo!()
+```bash
+# Replace server and token with your real values
+curl -fsSL https://github.com/rvnhq/raven/releases/latest/download/install.sh | sudo sh -s -- --server 127.0.0.1:9090 --token rvn_dev_token --tls false
+```
+
+For a pinned version:
+
+```bash
+curl -fsSL https://github.com/rvnhq/raven/releases/download/<version>/install.sh | sudo sh -s -- --server 127.0.0.1:9090 --token rvn_dev_token --tls false
 ```
 
 Metrics start flowing within 10 seconds. Add log file paths to `/etc/raven/agent.toml` and restart the agent to start collecting logs.
@@ -75,6 +78,12 @@ Metrics start flowing within 10 seconds. Add log file paths to `/etc/raven/agent
 - `docker` and `docker-compose` (optional, if you want to run the raven-server with docker): any recent version
 
 ### Running locally (without docker)
+
+0. Setup - run `.scripts/install_local.sh`
+
+```bash
+./scripts/install_local.sh
+```
 
 1. Start the server
 
