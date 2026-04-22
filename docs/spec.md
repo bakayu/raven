@@ -164,6 +164,22 @@ The central server receives data from agents, stores it in the appropriate datab
   - `LogBatch` → ClickHouse via HTTP interface.
 - If database writes are slow, the server slows down reading from the gRPC stream, applying backpressure to the agent.
 
+#### Portal Authentication (Dashboard Users)
+
+Portal authentication is separate from agent ingestion authentication.
+
+- **Login methods:**
+   - Local username + password (Argon2id verification).
+   - OIDC (OAuth 2.0 Authorization Code + PKCE) for the dashboard portal only.
+- **Converged session path:**
+   1. Validate identity (password or OIDC ID token claims).
+   2. Resolve or create/link one local `users` record.
+   3. Issue a short-lived JWT access token for API calls.
+   4. Issue a refresh token stored as an httpOnly cookie.
+- **Refresh token rotation:** `POST /api/auth/refresh` rotates the refresh token on every successful use (old token revoked, new token issued).
+- **Logout behavior:** `POST /api/auth/logout` revokes the current refresh token and clears auth cookies.
+- **Out of scope for now:** logout-everywhere flow.
+
 #### ClickHouse Schema
 
 ```sql
@@ -191,13 +207,45 @@ Auto-migrated on first boot via `sqlx::migrate!`.
 ```sql
 -- Dashboard users
 CREATE TABLE users (
-    id            TEXT PRIMARY KEY DEFAULT (hex(randomblob(16))),
-    username      TEXT NOT NULL UNIQUE,
-    email         TEXT,
-    password_hash TEXT NOT NULL,            -- Argon2id
-    role          TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
-    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+   id            TEXT PRIMARY KEY DEFAULT (hex(randomblob(16))),
+   username      TEXT NOT NULL UNIQUE,
+   email         TEXT,
+   password_hash TEXT,                     -- Argon2id; NULL allowed for OIDC-only users
+   role          TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+   failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+   auth_locked_until TEXT,
+   last_login_at  TEXT,
+   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- External identities linked to local users
+CREATE TABLE user_identities (
+   id            TEXT PRIMARY KEY DEFAULT (hex(randomblob(16))),
+   user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+   provider      TEXT NOT NULL,            -- e.g. google, github, microsoft
+   issuer        TEXT NOT NULL,
+   subject       TEXT NOT NULL,
+   email         TEXT,
+   email_verified INTEGER NOT NULL DEFAULT 0,
+   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+   last_login_at TEXT,
+   UNIQUE (issuer, subject)
+);
+
+-- Refresh token sessions (stored hashed)
+CREATE TABLE refresh_tokens (
+   id            TEXT PRIMARY KEY DEFAULT (hex(randomblob(16))),
+   user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+   token_hash    TEXT NOT NULL UNIQUE,
+   issued_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+   expires_at    TEXT NOT NULL,
+   rotated_from_token_id TEXT REFERENCES refresh_tokens(id) ON DELETE SET NULL,
+   revoked_at    TEXT,
+   revoked_reason TEXT,
+   created_by_ip TEXT,
+   created_by_user_agent TEXT,
+   last_used_at  TEXT
 );
 
 -- Agent authentication tokens
@@ -260,27 +308,51 @@ CREATE TABLE alert_events (
     fired_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     resolved_at   TEXT
 );
+
+-- Append-only audit trail for security/admin-sensitive actions
+CREATE TABLE audit_log (
+   id            TEXT PRIMARY KEY DEFAULT (hex(randomblob(16))),
+   actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+   action        TEXT NOT NULL,
+   entity_type   TEXT NOT NULL,
+   entity_id     TEXT,
+   metadata      TEXT NOT NULL DEFAULT '{}',
+   ip            TEXT,
+   user_agent    TEXT,
+   request_id    TEXT,
+   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
 ```
 
 **Data ownership model:**
 
+- **Users** are local Raven identities. They can authenticate with password, OIDC, or both.
+- **External identities** are mapped in `user_identities`; one local user can link multiple OIDC identities.
+- **Refresh tokens** are per-session credentials owned by a user and stored only as hashes.
 - **Agent tokens** are owned by the user who created them (`created_by`). Admins can see all tokens; members see only their own.
 - **Agents** are associated with their token (`token_id`), which transitively links them to the user.
 - **Alert rules** and **notification channels** are owned by the creating user. Admins can view/edit all; members manage only their own.
 - **Alert events** are system-generated and visible to all authenticated users.
+- **Audit logs** are append-only. Admins can view full audit history.
 
 **Runtime state vs. persisted state:**
 
 - The `agents` table stores registration metadata (hostname, OS, version, log files) and `last_seen_at`. This is persisted.
 - Online/offline status and in-memory heartbeat tracking are held in a `DashMap<String, AgentState>` in the server process. On startup, all agents are loaded from SQLite and marked offline until their first heartbeat arrives.
 - Alert rule state machine (`OK`, `Pending`, `Firing`) is held in memory. On restart, all rules start in `OK` — the evaluation loop will detect ongoing threshold violations within one cycle (30s).
+- Request-level rate limiting counters are maintained in memory with periodic cleanup.
+- Account lockout timestamps (`users.auth_locked_until`) and audit records are persisted in SQLite.
 
 #### HTTP API
 
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/api/auth/setup` | POST | First-time admin account creation (returns 409 if any user exists) |
-| `/api/auth/login` | POST | Authenticate with username + password, return JWT |
+| `/api/auth/login` | POST | Authenticate with username + password, issue short-lived JWT + refresh token |
+| `/api/auth/oidc/:provider/start` | GET | Start OIDC login flow (Authorization Code + PKCE) |
+| `/api/auth/oidc/:provider/callback` | GET | Complete OIDC login flow, converge to local user + JWT + refresh token issuance |
+| `/api/auth/refresh` | POST | Rotate refresh token and issue a new short-lived JWT |
+| `/api/auth/logout` | POST | Revoke active refresh token and clear auth cookies |
 | `/api/users` | GET | List all users (admin only) |
 | `/api/users` | POST | Invite / create a new user (admin only) |
 | `/api/users/:id` | GET | Get user profile (admin or self) |
@@ -289,6 +361,8 @@ CREATE TABLE alert_events (
 | `/api/users/me` | GET | Current authenticated user profile |
 | `/api/users/me` | PUT | Update own profile (username, email) |
 | `/api/users/me/password` | PUT | Change own password (requires current password) |
+| `/api/users/me/identities` | GET | List linked OIDC identities for current user |
+| `/api/users/me/identities/:id` | DELETE | Unlink one OIDC identity from current user |
 | `/api/agents` | GET | List registered agents + live status |
 | `/api/agents/tokens` | GET | List agent tokens (admin: all, member: own) |
 | `/api/agents/tokens` | POST | Generate new agent token |
@@ -302,6 +376,8 @@ CREATE TABLE alert_events (
 | `/api/alerts/channels/:id` | PUT/DELETE | Update or delete a notification channel |
 | `/api/alerts/events` | GET | List alert history (firing/resolved events) |
 | `/api/alerts/test` | POST | Send a test notification to a channel |
+| `/healthz` | GET | Liveness probe (process up) |
+| `/readyz` | GET | Readiness probe (db/migrations/dependencies ready) |
 
 **Metrics query parameters:**
 
@@ -318,6 +394,29 @@ Supported shorthand ranges: `5m`, `15m`, `1h`, `6h`, `24h`, `7d`. The server tra
 GET /api/logs?host=web-1&app=my-api&search=error&range=1h&limit=1000
 GET /api/logs?host=web-1&from=2026-03-01T00:00:00Z&to=2026-03-02T00:00:00Z
 ```
+
+#### Operational Endpoints and Request Tracing
+
+- `GET /healthz`: returns success if the process is alive.
+- `GET /readyz`: verifies readiness (SQLite reachable, migrations applied, and downstream dependencies reachable within timeout).
+- Every HTTP request carries a request ID:
+   - Respect incoming `x-request-id` when valid.
+   - Otherwise generate one server-side.
+- Structured logs include: request ID, user ID (if authenticated), method, path, status, latency, and error context.
+
+#### Abuse Controls
+
+- Rate-limit authentication-sensitive endpoints:
+   - `POST /api/auth/setup`
+   - `POST /api/auth/login`
+   - `POST /api/auth/refresh`
+   - `POST /api/agents/tokens`
+- Apply temporary lockout/backoff after repeated failed logins:
+   - Track failures per account and IP.
+   - Increase delay progressively.
+   - Persist lockout window in `users.auth_locked_until`.
+- Successful login resets failure counters.
+- Record rate-limit and lockout events in `audit_log`.
 
 #### Live Log Tail
 
@@ -374,7 +473,7 @@ No external dashboard hosting is required.
 
 #### Pages
 
-**Login**: JWT authentication. Token stored in httpOnly cookie.
+**Login**: Password login (Argon2id) and OIDC login for portal users. Both converge to the same backend auth path and issue a short-lived JWT plus rotating refresh token (stored in httpOnly cookies).
 
 **Agents Overview**: Grid of cards, one per monitored host. Each card shows:
 - Hostname and IP
@@ -463,7 +562,7 @@ No external dashboard hosting is required.
 ### Phase 4 — Central Server: Ingestion & Application Database
 
 1. Set up SQLite database with `sqlx`. Embed migrations in the binary via `sqlx::migrate!`. Auto-run on first boot.
-2. Create SQLite schema: `users`, `agent_tokens`, `agents`, `alert_rules`, `notification_channels`, `alert_events` tables.
+2. Create SQLite schema: `users`, `user_identities`, `refresh_tokens`, `agent_tokens`, `agents`, `alert_rules`, `notification_channels`, `alert_events`, `audit_log` tables.
 3. Implement `tonic` gRPC server: accept `Register`, `StreamMetrics`, `StreamLogs`, `Heartbeat`.
 4. Validate bearer token on each connection — hash incoming token, look up in `agent_tokens` table. Reject invalid tokens.
 5. Agent registry: upsert agent info into `agents` table on `Register`. Track live status in memory (`DashMap`). Update `last_seen_at` on heartbeat.
@@ -478,16 +577,24 @@ No external dashboard hosting is required.
 1. Build `axum` HTTP API with all endpoints listed in section 2.2.
 2. Serve dashboard static assets (`dashboard/dist`) from axum at `/` and configure SPA fallback to `index.html`.
 3. `POST /api/auth/setup`: first-time admin account creation. Hash password with Argon2id, insert into `users` table. Return 409 if any user already exists.
-4. `POST /api/auth/login`: validate username + password against `users` table (Argon2id verify). Return JWT containing `user_id`, `role`, `exp`.
-5. JWT auth middleware: extract and validate JWT from `Authorization` header or httpOnly cookie. Inject user context into request extensions.
-6. User CRUD endpoints: `GET/POST /api/users` (admin only), `GET/PUT/DELETE /api/users/:id`, `GET/PUT /api/users/me`, `PUT /api/users/me/password`.
-7. Agent token management: `GET/POST /api/agents/tokens`, `DELETE /api/agents/tokens/:id`. Tokens scoped to creating user (admin sees all). Store SHA-256 hash in SQLite, return raw token only on creation.
-8. Agents endpoint: return registered agents from SQLite + live status from in-memory registry.
-9. Metrics endpoint: proxy to VictoriaMetrics `/api/v1/query_range`. Translate shorthand ranges (`5m`, `1h`, `7d`) to absolute timestamps. Adjust `step` parameter for downsampling.
-10. Logs endpoint: query ClickHouse with hostname, app, time range, search text filters. Paginate results.
-11. WebSocket endpoint for live log tail: register subscriber on broadcast channel, filter by host/app, forward matching lines.
-12. CORS configuration for dashboard origin.
-13. Test: full request cycle — create user, create token, connect agent, push data, query via API, verify results.
+4. `POST /api/auth/login`: validate username + password against `users` table (Argon2id verify). Issue short-lived JWT + refresh token.
+5. OIDC login endpoints (`/api/auth/oidc/:provider/start`, `/api/auth/oidc/:provider/callback`) using Authorization Code + PKCE.
+6. Converged auth service: both password and OIDC logins resolve to one local user and issue the same JWT + refresh-token session model.
+7. `POST /api/auth/refresh`: validate hashed refresh token, rotate refresh token, issue new JWT.
+8. `POST /api/auth/logout`: revoke active refresh token and clear auth cookies.
+9. JWT auth middleware: extract and validate JWT from `Authorization` header or httpOnly cookie. Inject user context into request extensions.
+10. User CRUD endpoints: `GET/POST /api/users` (admin only), `GET/PUT/DELETE /api/users/:id`, `GET/PUT /api/users/me`, `PUT /api/users/me/password`.
+11. OIDC account linking endpoints for current user; persist mappings in `user_identities`.
+12. Agent token management: `GET/POST /api/agents/tokens`, `DELETE /api/agents/tokens/:id`. Tokens scoped to creating user (admin sees all). Store SHA-256 hash in SQLite, return raw token only on creation.
+13. Agents endpoint: return registered agents from SQLite + live status from in-memory registry.
+14. Metrics endpoint: proxy to VictoriaMetrics `/api/v1/query_range`. Translate shorthand ranges (`5m`, `1h`, `7d`) to absolute timestamps. Adjust `step` parameter for downsampling.
+15. Logs endpoint: query ClickHouse with hostname, app, time range, search text filters. Paginate results.
+16. WebSocket endpoint for live log tail: register subscriber on broadcast channel, filter by host/app, forward matching lines.
+17. CORS configuration for dashboard origin.
+18. Operational endpoints and middleware: `/healthz`, `/readyz`, request ID propagation, structured access logs.
+19. Abuse controls: endpoint rate limiting and temporary auth lockout/backoff after repeated failures.
+20. Audit logging: persist login/logout, token creation/revocation, role changes, alert rule changes, and admin actions.
+21. Test: full request cycle across password login and OIDC login, token refresh rotation, logout, agent ingest, and data queries.
 
 ### Phase 6 — Alerting Engine
 
@@ -505,7 +612,7 @@ No external dashboard hosting is required.
 
 ### Phase 7 — Dashboard
 
-1. **Login page**: First visit → `POST /api/auth/setup` flow if no users exist (create admin). Otherwise, login form → `POST /api/auth/login` → store JWT → redirect.
+1. **Login page**: First visit → `POST /api/auth/setup` flow if no users exist (create admin). Otherwise, login with username/password or OIDC. Both flows converge to short-lived JWT + rotating refresh-token cookies.
 2. **Agents overview page**: Fetch `GET /api/agents`. Cards per host with CPU/mem/disk sparklines (ECharts). Online/offline badge. Last seen. Click to drill down.
 3. **Host detail page**: Time range picker (`5m | 15m | 1h | 6h | 24h | 7d | Custom`). Full-width charts for CPU, memory, disk I/O, network, load average. Auto-refresh via TanStack Query refetch interval.
 4. **Log explorer page**: Filter bar (hostname, app, stream, search text, time range). Log table with syntax highlighting. stderr lines in red. "Live Tail" toggle opens WebSocket — new lines auto-scroll at bottom. Pause button buffers without losing data. Pagination for historical queries.
@@ -579,7 +686,12 @@ If time permits after core phases are complete:
 | Dashboard hosting | Built static assets served by `raven-server` | Zero extra service, no external hosting dependency, same-origin API/WebSocket simplifies auth and CORS. |
 | Self-hostable design | Single `docker compose up`, auto-migrations, zero wiring | Follows the Plausible/Umami/Uptime Kuma pattern. Makes the project accessible. |
 | Application DB | SQLite (embedded) over PostgreSQL | No extra container, zero config, single file. CRUD workload is low-volume (users, tokens, alert rules) — SQLite handles it easily. ClickHouse is OLAP and unsuited for transactional CRUD. |
-| User auth | Argon2id password hashing + JWT | Industry standard. Argon2id is the recommended password hashing algorithm (OWASP). Stateless JWT avoids session table lookups on every request. |
+| Portal auth | Argon2id password login + OIDC login (portal only), converging to local JWT sessions | Supports both local auth and SSO while keeping one authorization model in the backend. |
+| Session model | Short-lived JWT + rotating refresh tokens | Limits access-token lifetime, supports secure re-auth, and enables explicit logout through refresh-token revocation. |
+| OIDC identity mapping | `user_identities` table linked to local users | Prevents duplicate accounts and allows one local user to link multiple external identities. |
+| Auditability | Append-only `audit_log` table | Captures login/logout, token lifecycle events, role changes, alert-rule changes, and other admin actions for traceability. |
+| Operational diagnostics | `/healthz`, `/readyz`, request IDs, structured logs | Improves observability, debugging, and grading confidence for real backend operations. |
+| Abuse controls | Rate limiting + temporary lockout/backoff | Reduces brute-force and endpoint abuse risk without adding heavy infrastructure. |
 | Data ownership | Per-user scoping with admin override | Agent tokens, alert rules, and notification channels are owned by creating user. Admins see everything. Prevents accidental cross-user interference. |
 
 ---
