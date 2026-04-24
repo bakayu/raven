@@ -243,7 +243,10 @@ pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentCo
     let mut pending_metrics = Vec::new();
     let mut pending_logs = Vec::new();
 
-    let mut wal = init_wal_store(cfg.transport.wal_max_size_mb.saturating_mul(BYTES_PER_MB));
+    let mut wal = init_wal_store(
+        &cfg,
+        cfg.transport.wal_max_size_mb.saturating_mul(BYTES_PER_MB),
+    );
 
     let mut connection: Option<StreamConnection> = None;
 
@@ -400,13 +403,13 @@ pub async fn transport_task(mut rx: mpsc::Receiver<AgentEvent>, cfg: Arc<AgentCo
     }
 }
 
-fn init_wal_store(max_bytes: u64) -> Option<WalStore> {
+fn init_wal_store(cfg: &AgentConfig, max_bytes: u64) -> Option<WalStore> {
     if max_bytes == 0 {
         warn!("WAL disabled because wal_max_size_mb resolved to 0 bytes");
         return None;
     }
 
-    let wal_path = resolve_wal_path();
+    let wal_path = resolve_wal_path(cfg);
 
     match WalStore::new(wal_path.clone(), max_bytes) {
         Ok(store) => {
@@ -428,7 +431,13 @@ fn init_wal_store(max_bytes: u64) -> Option<WalStore> {
     }
 }
 
-fn resolve_wal_path() -> PathBuf {
+fn resolve_wal_path(cfg: &AgentConfig) -> PathBuf {
+    if let Some(path) = cfg.transport.wal_path.as_deref()
+        && !path.trim().is_empty()
+    {
+        return PathBuf::from(path);
+    }
+
     std::env::var(WAL_PATH_ENV)
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_WAL_PATH))
@@ -1072,6 +1081,14 @@ mod tests {
         assert_eq!(generated, loaded);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn resolve_wal_path_prefers_config_value() {
+        let mut cfg = AgentConfig::default();
+        cfg.transport.wal_path = Some("/tmp/raven-config.wal".to_string());
+
+        assert_eq!(resolve_wal_path(&cfg), PathBuf::from("/tmp/raven-config.wal"));
     }
 
     fn test_log_batch(agent_id: &str) -> ProtoLogBatch {

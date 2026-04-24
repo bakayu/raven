@@ -32,3 +32,7 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 hostname = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
