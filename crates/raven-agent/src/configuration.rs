@@ -103,7 +103,7 @@ impl Default for TransportConfig {
             wal_max_size_mb: 100,
             wal_path: None,
             heartbeat_interval_seconds: 30,
-            channel_capacity: 256,
+            channel_capacity: 4096,
         }
     }
 }
@@ -140,7 +140,7 @@ impl AgentConfig {
             .set_default("transport.retry_max_interval_seconds", 60)?
             .set_default("transport.wal_max_size_mb", 100)?
             .set_default("transport.heartbeat_interval_seconds", 30)?
-            .set_default("transport.channel_capacity", 256)?
+            .set_default("transport.channel_capacity", 4096)?
             .set_default("logging.level", "info")?
             .set_default("logging.service_name", "raven-agent")?
             .add_source(File::from(path).required(false))
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(cfg.transport.wal_max_size_mb, 100);
         assert!(cfg.transport.wal_path.is_none());
         assert_eq!(cfg.transport.heartbeat_interval_seconds, 30);
-        assert_eq!(cfg.transport.channel_capacity, 256);
+        assert_eq!(cfg.transport.channel_capacity, 4096);
 
         assert_eq!(cfg.logging.level, "info");
         assert_eq!(cfg.logging.service_name, "raven-agent");

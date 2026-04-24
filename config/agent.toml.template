@@ -17,7 +17,7 @@ wal_max_size_mb = 100
 # Optional WAL file path override
 # wal_path = "__WAL_PATH__"
 heartbeat_interval_seconds = 30
-channel_capacity = 256
+channel_capacity = 4096
 
 [logging]
 level = "info"
