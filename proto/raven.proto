@@ -8,16 +8,11 @@ service RavenIngestion {
   // Agent registration method for agents to register themselves with the server
   rpc Register(RegisterRequest) returns (RegisterResponse);
 
-  // Metrics rpc - unary method
-  rpc IngestMetrics(MetricBatch) returns (StreamResponse);
+  // Metrics stream from agent to server.
+  rpc StreamMetrics(stream MetricBatch) returns (StreamResponse);
 
-  //Mtrics rpc - stream
-  // rpc StreamMetrics(stream MetricBatch) returns (StreamResponse);
-
-  // Logs rpc - unary method
-  rpc IngestLogs(LogBatch) returns (StreamResponse);
-
-  // rpc StreamLogs(stream LogBatch) returns (StreamResponse);
+  // Logs stream from agent to server.
+  rpc StreamLogs(stream LogBatch) returns (StreamResponse);
 
   // Heartbeat method for agents to send periodic updates to the server
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);

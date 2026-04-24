@@ -12,6 +12,7 @@ raven-proto = { path = "../raven-proto" }
 procfs = { workspace = true }
 rustix = { workspace = true }
 tonic = { workspace = true }
+prost = { workspace = true }
 prost-types = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

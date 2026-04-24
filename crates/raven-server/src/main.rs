@@ -1,5 +1,10 @@
+use std::fs;
+
 use chrono::{TimeZone, Utc};
-use tonic::{Request, Response, Status, transport::Server};
+use tonic::{
+    Request, Response, Status,
+    transport::{Identity, Server, ServerTlsConfig},
+};
 use tracing::{debug, info};
 
 use raven_proto::proto::raven_ingestion_server::{RavenIngestion, RavenIngestionServer};
@@ -47,6 +52,62 @@ impl Default for RavenServer {
     }
 }
 
+fn validate_metric_batch(batch: &MetricBatch) -> Result<chrono::DateTime<Utc>, Status> {
+    let sent_at = batch
+        .sent_at
+        .as_ref()
+        .ok_or_else(|| Status::invalid_argument("missing sent_at"))?;
+
+    Utc.timestamp_opt(sent_at.seconds, sent_at.nanos as u32)
+        .single()
+        .ok_or_else(|| Status::invalid_argument("invalid sent_at timestamp"))
+}
+
+fn validate_log_batch(batch: &LogBatch) -> Result<(chrono::DateTime<Utc>, usize, usize), Status> {
+    if batch.agent_id.trim().is_empty()
+        || batch.hostname.trim().is_empty()
+        || batch.source.trim().is_empty()
+    {
+        return Err(Status::invalid_argument(
+            "agent_id, hostname and source are required",
+        ));
+    }
+
+    let sent_at = batch
+        .sent_at
+        .as_ref()
+        .ok_or_else(|| Status::invalid_argument("missing sent_at"))?;
+
+    let sent_at = Utc
+        .timestamp_opt(sent_at.seconds, sent_at.nanos as u32)
+        .single()
+        .ok_or_else(|| Status::invalid_argument("invalid sent_at timestamp"))?;
+
+    let stdout_count = batch
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                ProtoLogStream::try_from(entry.stream),
+                Ok(ProtoLogStream::Stdout)
+            )
+        })
+        .count();
+
+    let stderr_count = batch
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                ProtoLogStream::try_from(entry.stream),
+                Ok(ProtoLogStream::Stderr)
+            )
+        })
+        .count();
+
+    Ok((sent_at, stdout_count, stderr_count))
+}
+
 #[tonic::async_trait]
 impl RavenIngestion for RavenServer {
     async fn register(
@@ -81,109 +142,76 @@ impl RavenIngestion for RavenServer {
             message: "agent registered".to_string(),
         }))
     }
-    async fn ingest_metrics(
+
+    async fn stream_metrics(
         &self,
-        request: Request<MetricBatch>,
+        request: Request<tonic::Streaming<MetricBatch>>,
     ) -> Result<Response<StreamResponse>, Status> {
         self.authorize(&request)?;
 
-        let batch = request.into_inner();
+        let mut stream = request.into_inner();
+        let mut batches = 0usize;
 
-        let sent_at = batch
-            .sent_at
-            .ok_or_else(|| Status::invalid_argument("missing sent_at"))?;
+        while let Some(batch) = stream.message().await? {
+            let sent_at = validate_metric_batch(&batch)?;
 
-        let date_time = Utc
-            .timestamp_opt(sent_at.seconds, sent_at.nanos as u32)
-            .single()
-            .ok_or_else(|| Status::invalid_argument("invalid sent_at timestamp"))?;
+            let cpu_total = batch
+                .cpu
+                .as_ref()
+                .map(|c| c.total_usage_percent)
+                .unwrap_or_default();
 
-        let cpu_total = batch
-            .cpu
-            .as_ref()
-            .map(|c| c.total_usage_percent)
-            .unwrap_or_default();
+            debug!(
+                agent_id = %batch.agent_id,
+                hostname = %batch.hostname,
+                sent_at = %sent_at,
+                cpu_total = cpu_total,
+                disk_io = batch.disk_io.len(),
+                filesystems = batch.filesystems.len(),
+                interfaces = batch.network_interfaces.len(),
+                "metrics batch received"
+            );
 
-        // TODO: this is just for debugging, included some of the info from MetricBatch
-        debug!(
-            agent_id = %batch.agent_id,
-            hostname = %batch.hostname,
-            sent_at = %date_time,
-            cpu_total = cpu_total,
-            disk_io = batch.disk_io.len(),
-            filesystems = batch.filesystems.len(),
-            interfaces = batch.network_interfaces.len(),
-            "metrics batch received"
-        );
+            batches += 1;
+        }
 
         Ok(Response::new(StreamResponse {
             ok: true,
-            message: "metrics accepted".to_string(),
+            message: format!("metrics stream accepted {batches} batches"),
         }))
     }
 
-    async fn ingest_logs(
+    async fn stream_logs(
         &self,
-        request: Request<LogBatch>,
+        request: Request<tonic::Streaming<LogBatch>>,
     ) -> Result<Response<StreamResponse>, Status> {
         self.authorize(&request)?;
 
-        let batch = request.into_inner();
+        let mut stream = request.into_inner();
+        let mut batches = 0usize;
+        let mut entries = 0usize;
 
-        if batch.agent_id.trim().is_empty()
-            || batch.hostname.trim().is_empty()
-            || batch.source.trim().is_empty()
-        {
-            return Err(Status::invalid_argument(
-                "agent_id, hostname and source are required",
-            ));
+        while let Some(batch) = stream.message().await? {
+            let (sent_at, stdout_count, stderr_count) = validate_log_batch(&batch)?;
+
+            info!(
+                agent_id = %batch.agent_id,
+                hostname = %batch.hostname,
+                source = %batch.source,
+                entries = batch.entries.len(),
+                stdout_entries = stdout_count,
+                stderr_entries = stderr_count,
+                sent_at = %sent_at,
+                "logs batch received"
+            );
+
+            batches += 1;
+            entries += batch.entries.len();
         }
-
-        let sent_at = batch
-            .sent_at
-            .ok_or_else(|| Status::invalid_argument("missing sent_at"))?;
-
-        let date_time = Utc
-            .timestamp_opt(sent_at.seconds, sent_at.nanos as u32)
-            .single()
-            .ok_or_else(|| Status::invalid_argument("invalid sent_at timestamp"))?;
-
-        let stdout_count = batch
-            .entries
-            .iter()
-            .filter(|e| {
-                matches!(
-                    ProtoLogStream::try_from(e.stream),
-                    Ok(ProtoLogStream::Stdout)
-                )
-            })
-            .count();
-
-        let stderr_count = batch
-            .entries
-            .iter()
-            .filter(|e| {
-                matches!(
-                    ProtoLogStream::try_from(e.stream),
-                    Ok(ProtoLogStream::Stderr)
-                )
-            })
-            .count();
-
-        info!(
-            agent_id = %batch.agent_id,
-            hostname = %batch.hostname,
-            source = %batch.source,
-            entries = batch.entries.len(),
-            stdout_entries = stdout_count,
-            stderr_entries = stderr_count,
-            sent_at = %date_time,
-            "logs batch received"
-        );
 
         Ok(Response::new(StreamResponse {
             ok: true,
-            message: "logs accepted".to_string(),
+            message: format!("logs stream accepted {batches} batches and {entries} entries"),
         }))
     }
 
@@ -220,18 +248,74 @@ impl RavenIngestion for RavenServer {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeConfig {
+    grpc_listen_addr: String,
+    expected_token: String,
+    tls_enabled: bool,
+    tls_cert_path: Option<String>,
+    tls_key_path: Option<String>,
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => default,
+        })
+        .unwrap_or(default)
+}
+
+fn env_opt(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn load_runtime_config() -> RuntimeConfig {
+    RuntimeConfig {
+        grpc_listen_addr: std::env::var("RAVEN_GRPC_LISTEN_ADDR")
+            .unwrap_or_else(|_| "0.0.0.0:9090".to_string()),
+        expected_token: std::env::var("RAVEN_AGENT_TOKEN")
+            .unwrap_or_else(|_| "rvn_dev_token".to_string()),
+        tls_enabled: env_bool("RAVEN_GRPC_TLS_ENABLED", false),
+        tls_cert_path: env_opt("RAVEN_GRPC_TLS_CERT_PATH"),
+        tls_key_path: env_opt("RAVEN_GRPC_TLS_KEY_PATH"),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_subscriber("raven-server", "info")?;
 
-    let addr = "0.0.0.0:9090".parse()?;
-    let expected_token =
-        std::env::var("RAVEN_AGENT_TOKEN").unwrap_or_else(|_| "rvn_dev_token".to_string());
-    let ingestion_server = RavenServer::new(expected_token);
+    let runtime = load_runtime_config();
+
+    let addr = runtime.grpc_listen_addr.parse()?;
+    let ingestion_server = RavenServer::new(runtime.expected_token.clone());
     let service = RavenIngestionServer::new(ingestion_server);
 
-    info!(listen_addr = %addr, "server starting");
-    Server::builder().add_service(service).serve(addr).await?;
+    let mut server_builder = Server::builder();
+
+    if runtime.tls_enabled {
+        let cert_path = runtime.tls_cert_path.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("RAVEN_GRPC_TLS_CERT_PATH is required when TLS is enabled")
+        })?;
+        let key_path = runtime.tls_key_path.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("RAVEN_GRPC_TLS_KEY_PATH is required when TLS is enabled")
+        })?;
+
+        let cert = fs::read(cert_path)?;
+        let key = fs::read(key_path)?;
+        let identity = Identity::from_pem(cert, key);
+
+        server_builder = server_builder.tls_config(ServerTlsConfig::new().identity(identity))?;
+    }
+
+    info!(listen_addr = %addr, tls = runtime.tls_enabled, "server starting");
+    server_builder.add_service(service).serve(addr).await?;
 
     Ok(())
 }
@@ -314,23 +398,19 @@ mod tests {
         assert!(resp.ok);
     }
 
-    #[tokio::test]
-    async fn ingest_metrics_rejects_missing_timestamp() {
-        let server = RavenServer::new("rvn_test_token".to_string());
+    #[test]
+    fn metric_validation_rejects_missing_timestamp() {
         let req = MetricBatch {
-            agent_id: "a1".to_string(),
-            hostname: "host1".to_string(),
             sent_at: None,
             ..Default::default()
         };
 
-        let err = server.ingest_metrics(with_auth(req)).await.unwrap_err();
+        let err = validate_metric_batch(&req).unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
     }
 
-    #[tokio::test]
-    async fn ingest_logs_rejects_missing_timestamp() {
-        let server = RavenServer::new("rvn_test_token".to_string());
+    #[test]
+    fn log_validation_rejects_missing_timestamp() {
         let req = LogBatch {
             agent_id: "a1".to_string(),
             hostname: "host1".to_string(),
@@ -339,13 +419,12 @@ mod tests {
             entries: vec![],
         };
 
-        let err = server.ingest_logs(with_auth(req)).await.unwrap_err();
+        let err = validate_log_batch(&req).unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
     }
 
-    #[tokio::test]
-    async fn ingest_logs_accepts_valid_batch() {
-        let server = RavenServer::new("rvn_test_token".to_string());
+    #[test]
+    fn log_validation_accepts_valid_batch() {
         let req = LogBatch {
             agent_id: "a1".to_string(),
             hostname: "host1".to_string(),
@@ -366,12 +445,8 @@ mod tests {
             }],
         };
 
-        let resp = server
-            .ingest_logs(with_auth(req))
-            .await
-            .unwrap()
-            .into_inner();
-
-        assert!(resp.ok);
+        let result = validate_log_batch(&req).expect("valid log batch should pass validation");
+        assert_eq!(result.1, 1);
+        assert_eq!(result.2, 0);
     }
 }

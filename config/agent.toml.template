@@ -2,6 +2,9 @@
 address = "__SERVER_ADDRESS__"
 token = "__TOKEN__"
 tls = __TLS__
+# Optional when tls=true
+# tls_domain_name = "__TLS_DOMAIN_NAME__"
+# tls_ca_cert_path = "__TLS_CA_CERT_PATH__"
 
 [metrics]
 interval_seconds = 10

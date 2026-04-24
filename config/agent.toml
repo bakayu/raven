@@ -2,6 +2,9 @@
 address = "127.0.0.1:9090"
 token = "rvn_dev_token"
 tls = false
+# Optional when tls=true
+# tls_domain_name = "raven.local"
+# tls_ca_cert_path = "/etc/raven/certs/ca.pem"
 
 [metrics]
 interval_seconds = 10
