@@ -1088,7 +1088,10 @@ mod tests {
         let mut cfg = AgentConfig::default();
         cfg.transport.wal_path = Some("/tmp/raven-config.wal".to_string());
 
-        assert_eq!(resolve_wal_path(&cfg), PathBuf::from("/tmp/raven-config.wal"));
+        assert_eq!(
+            resolve_wal_path(&cfg),
+            PathBuf::from("/tmp/raven-config.wal")
+        );
     }
 
     fn test_log_batch(agent_id: &str) -> ProtoLogBatch {

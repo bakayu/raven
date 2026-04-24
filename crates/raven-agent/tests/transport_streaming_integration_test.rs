@@ -1,6 +1,7 @@
 use std::{
     fs,
     net::SocketAddr,
+    path::Path,
     path::PathBuf,
     sync::{
         Arc, Once,
@@ -151,7 +152,7 @@ fn unused_local_addr() -> SocketAddr {
     addr
 }
 
-fn write_tls_identity(root: &PathBuf) -> (PathBuf, PathBuf) {
+fn write_tls_identity(root: &Path) -> (PathBuf, PathBuf) {
     let mut params = CertificateParams::new(vec!["localhost".to_string()]).expect("cert params");
     params
         .distinguished_name
@@ -211,7 +212,7 @@ async fn start_mock_server(
     (state, shutdown_tx, handle)
 }
 
-fn test_config(addr: SocketAddr, wal_path: &PathBuf) -> AgentConfig {
+fn test_config(addr: SocketAddr, wal_path: &Path) -> AgentConfig {
     let mut cfg = AgentConfig::default();
 
     cfg.server.address = addr.to_string();
