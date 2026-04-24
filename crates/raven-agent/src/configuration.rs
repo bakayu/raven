@@ -21,6 +21,8 @@ pub struct ServerConfig {
     pub address: String,
     pub token: SecretString,
     pub tls: bool,
+    pub tls_domain_name: Option<String>,
+    pub tls_ca_cert_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,6 +38,7 @@ pub struct TransportConfig {
     pub flush_interval_seconds: u64,
     pub retry_max_interval_seconds: u64,
     pub wal_max_size_mb: u64,
+    pub wal_path: Option<String>,
     pub heartbeat_interval_seconds: u64,
     pub channel_capacity: usize,
 }
@@ -77,6 +80,8 @@ impl Default for ServerConfig {
             address: "127.0.0.1:9090".to_string(),
             token: SecretString::new(String::new().into()),
             tls: true,
+            tls_domain_name: None,
+            tls_ca_cert_path: None,
         }
     }
 }
@@ -96,8 +101,9 @@ impl Default for TransportConfig {
             flush_interval_seconds: 5,
             retry_max_interval_seconds: 60,
             wal_max_size_mb: 100,
+            wal_path: None,
             heartbeat_interval_seconds: 30,
-            channel_capacity: 256,
+            channel_capacity: 4096,
         }
     }
 }
@@ -134,7 +140,7 @@ impl AgentConfig {
             .set_default("transport.retry_max_interval_seconds", 60)?
             .set_default("transport.wal_max_size_mb", 100)?
             .set_default("transport.heartbeat_interval_seconds", 30)?
-            .set_default("transport.channel_capacity", 256)?
+            .set_default("transport.channel_capacity", 4096)?
             .set_default("logging.level", "info")?
             .set_default("logging.service_name", "raven-agent")?
             .add_source(File::from(path).required(false))
@@ -147,7 +153,20 @@ impl AgentConfig {
             )
             .build()?;
 
-        let cfg: AgentConfig = cfg.try_deserialize()?;
+        let mut cfg: AgentConfig = cfg.try_deserialize()?;
+
+        if cfg.server.tls_domain_name.as_deref() == Some("") {
+            cfg.server.tls_domain_name = None;
+        }
+
+        if cfg.server.tls_ca_cert_path.as_deref() == Some("") {
+            cfg.server.tls_ca_cert_path = None;
+        }
+
+        if cfg.transport.wal_path.as_deref() == Some("") {
+            cfg.transport.wal_path = None;
+        }
+
         cfg.validate()?;
 
         Ok(cfg)
@@ -200,6 +219,8 @@ mod tests {
         assert_eq!(cfg.server.address, "127.0.0.1:9090");
         assert_eq!(cfg.server.token.expose_secret(), "");
         assert!(cfg.server.tls);
+        assert!(cfg.server.tls_domain_name.is_none());
+        assert!(cfg.server.tls_ca_cert_path.is_none());
 
         assert_eq!(cfg.metrics.interval_seconds, 10);
 
@@ -207,8 +228,9 @@ mod tests {
         assert_eq!(cfg.transport.flush_interval_seconds, 5);
         assert_eq!(cfg.transport.retry_max_interval_seconds, 60);
         assert_eq!(cfg.transport.wal_max_size_mb, 100);
+        assert!(cfg.transport.wal_path.is_none());
         assert_eq!(cfg.transport.heartbeat_interval_seconds, 30);
-        assert_eq!(cfg.transport.channel_capacity, 256);
+        assert_eq!(cfg.transport.channel_capacity, 4096);
 
         assert_eq!(cfg.logging.level, "info");
         assert_eq!(cfg.logging.service_name, "raven-agent");
@@ -224,6 +246,8 @@ mod tests {
 address = "10.1.2.3:9090"
 token = "rvn_test"
 tls = false
+tls_domain_name = "raven.internal"
+tls_ca_cert_path = "/etc/raven/certs/ca.pem"
 
 [metrics]
 interval_seconds = 3
@@ -233,6 +257,7 @@ batch_size = 7
 flush_interval_seconds = 2
 retry_max_interval_seconds = 8
 wal_max_size_mb = 11
+wal_path = "/var/lib/raven/test.wal"
 heartbeat_interval_seconds = 4
 channel_capacity = 9
 
@@ -254,6 +279,14 @@ stream = "stdout"
         assert_eq!(cfg.server.address, "10.1.2.3:9090");
         assert_eq!(cfg.server.token.expose_secret(), "rvn_test");
         assert!(!cfg.server.tls);
+        assert_eq!(
+            cfg.server.tls_domain_name.as_deref(),
+            Some("raven.internal")
+        );
+        assert_eq!(
+            cfg.server.tls_ca_cert_path.as_deref(),
+            Some("/etc/raven/certs/ca.pem")
+        );
 
         assert_eq!(cfg.metrics.interval_seconds, 3);
 
@@ -261,6 +294,10 @@ stream = "stdout"
         assert_eq!(cfg.transport.flush_interval_seconds, 2);
         assert_eq!(cfg.transport.retry_max_interval_seconds, 8);
         assert_eq!(cfg.transport.wal_max_size_mb, 11);
+        assert_eq!(
+            cfg.transport.wal_path.as_deref(),
+            Some("/var/lib/raven/test.wal")
+        );
         assert_eq!(cfg.transport.heartbeat_interval_seconds, 4);
         assert_eq!(cfg.transport.channel_capacity, 9);
 

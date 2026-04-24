@@ -117,6 +117,7 @@ impl Watcher {
             if event.mask.contains(EventMask::MOVE_SELF)
                 || event.mask.contains(EventMask::DELETE_SELF)
             {
+                self.remove_watch_mappings(&event.wd);
                 dedup.insert(TailerEvent::Rotated(path));
                 return;
             }

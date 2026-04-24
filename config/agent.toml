@@ -2,6 +2,9 @@
 address = "127.0.0.1:9090"
 token = "rvn_dev_token"
 tls = false
+# Optional when tls=true
+# tls_domain_name = "raven.local"
+# tls_ca_cert_path = "/etc/raven/certs/ca.pem"
 
 [metrics]
 interval_seconds = 10
@@ -11,8 +14,10 @@ batch_size = 100
 flush_interval_seconds = 5
 retry_max_interval_seconds = 60
 wal_max_size_mb = 100
+# Optional WAL file path override (default: /var/lib/raven/transport.wal)
+# wal_path = "/var/lib/raven/transport.wal"
 heartbeat_interval_seconds = 30
-channel_capacity = 256
+channel_capacity = 4096
 
 [logging]
 level = "info"

@@ -2,6 +2,9 @@
 address = "__SERVER_ADDRESS__"
 token = "__TOKEN__"
 tls = __TLS__
+# Optional when tls=true
+# tls_domain_name = "__TLS_DOMAIN_NAME__"
+# tls_ca_cert_path = "__TLS_CA_CERT_PATH__"
 
 [metrics]
 interval_seconds = 10
@@ -11,8 +14,10 @@ batch_size = 100
 flush_interval_seconds = 5
 retry_max_interval_seconds = 60
 wal_max_size_mb = 100
+# Optional WAL file path override
+# wal_path = "__WAL_PATH__"
 heartbeat_interval_seconds = 30
-channel_capacity = 256
+channel_capacity = 4096
 
 [logging]
 level = "info"

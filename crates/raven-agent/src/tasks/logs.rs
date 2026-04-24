@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info};
 
 use crate::{AgentConfig, AgentEvent, LogTailer};
@@ -11,9 +11,10 @@ pub async fn logs_task(tx_events: mpsc::Sender<AgentEvent>, cfg: Arc<AgentConfig
         return;
     }
 
-    let (tx, mut rx) = mpsc::channel(cfg.transport.channel_capacity);
+    let (tx, rx) = mpsc::channel(cfg.transport.channel_capacity);
+    let rx = Arc::new(Mutex::new(rx));
 
-    let tailer = match LogTailer::new(cfg.logs.clone(), tx) {
+    let tailer = match LogTailer::new_with_drop_oldest(cfg.logs.clone(), tx, rx.clone()) {
         Ok(tailer) => tailer,
         Err(err) => {
             error!(error = %err, "failed to initialize log tailer");
@@ -23,7 +24,16 @@ pub async fn logs_task(tx_events: mpsc::Sender<AgentEvent>, cfg: Arc<AgentConfig
 
     let tailer_handle = tokio::spawn(async move { tailer.run().await });
 
-    while let Some(batch) = rx.recv().await {
+    loop {
+        let maybe_batch = {
+            let mut guard = rx.lock().await;
+            guard.recv().await
+        };
+
+        let Some(batch) = maybe_batch else {
+            break;
+        };
+
         info!(
             source = %batch.source,
             entries = batch.entries.len(),
