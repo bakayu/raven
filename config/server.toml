@@ -1,0 +1,27 @@
+[server]
+http_listen_addr = "0.0.0.0:8080"
+grpc_listen_addr = "0.0.0.0:9090"
+public_base_url = "http://localhost:8080"
+
+[auth]
+jwt_issuer = "raven"
+jwt_audience = "raven-dashboard"
+access_token_ttl_minutes = 15
+refresh_token_ttl_days = 30
+jwt_signing_key = "CHANGE_ME_LONG_RANDOM_SECRET"
+
+[oidc.google]
+enabled = false
+# Google OIDC issuer
+issuer = "https://accounts.google.com"
+# Discovery URL (optional if derived from issuer)
+discovery_url = "https://accounts.google.com/.well-known/openid-configuration"
+
+# Google Cloud OAuth client
+client_id = "YOUR_GOOGLE_CLIENT_ID"
+client_secret = "YOUR_GOOGLE_CLIENT_SECRET"
+
+# full redirect URI is derived from public_base_url + callback_path
+callback_path = "/api/auth/oidc/google/callback"
+
+scopes = ["openid", "email", "profile"]
