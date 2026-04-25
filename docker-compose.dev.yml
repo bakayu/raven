@@ -1,0 +1,42 @@
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.137.0
+    command:
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=30d
+    ports:
+      - "8428:8428"
+    volumes:
+      - vm-data:/victoria-metrics-data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8428/health | grep -qi ok || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.2-alpine
+    environment:
+      CLICKHOUSE_DB: raven
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"
+    volumes:
+      - ch-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  vm-data:
+  ch-data:
