@@ -3,44 +3,62 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
-      - "8080:8080"   # HTTP API + dashboard
-      - "9090:9090"   # gRPC ingestion
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      RUST_LOG: raven_server=info
     volumes:
       - raven-data:/var/lib/raven
       - ./config/server.toml:/etc/raven/server.toml:ro
-    environment:
-      - RUST_LOG=raven_server=info
-    # depends_on:
-    #   victoriametrics:
-    #     condition: service_started
-    #   clickhouse:
-    #     condition: service_started
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    # healthcheck:
+    #   test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/readyz || exit 1"]
+    #   interval: 10s
+    #   timeout: 3s
+    #   retries: 12
+    #   start_period: 20s
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.137.0
     restart: unless-stopped
+    command:
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=30d
+    volumes:
+      - vm-data:/victoria-metrics-data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8428/health | grep -qi ok || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
-  # victoriametrics:
-  #   image: victoriametrics/victoria-metrics:v1.137.0
-  #   volumes:
-  #     - vm-data:/victoria-metrics-data
-  #   command:
-  #     - "-storageDataPath=/victoria-metrics-data"
-  #     - "-retentionPeriod=30d"
-  #   restart: unless-stopped
-
-  # clickhouse:
-  #   image: clickhouse/clickhouse-server:26.2-alpine
-  #   volumes:
-  #     - ch-data:/var/lib/clickhouse
-  #   environment:
-  #     - CLICKHOUSE_DB=raven
-  #     - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-  #   ulimits:
-  #     nofile:
-  #       soft: 262144
-  #       hard: 262144
-  #   restart: unless-stopped
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.2-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: raven
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - ch-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
 
 volumes:
   raven-data:
-  # vm-data:
-  # ch-data:
+  vm-data:
+  ch-data:

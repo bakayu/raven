@@ -51,9 +51,6 @@ ci: fmt-check clippy test
 run-server:
     cargo run -p raven-server
 
-run-server-bunyan:
-    cargo run -p raven-server | bunyan
-
 run-agent:
     cargo run -p raven-agent -- --config {{ agent_config }}
 
@@ -62,6 +59,11 @@ run-agent-bunyan:
 
 watch-server:
     cargo watch -w crates/raven-server -w crates/raven-proto -w proto -x "run -p raven-server"
+
+watch-server-fast:
+    env \
+      RUST_LOG=raven_server=debug \
+      cargo watch -w crates/raven-server -w crates/raven-proto -w proto -x "run -p raven-server"
 
 watch-agent:
     cargo watch -w crates/raven-agent -w crates/raven-proto -w proto -x "run -p raven-agent -- --config {{ agent_config }}"
@@ -74,13 +76,6 @@ dev-agent-fast:
       RAVEN_TRANSPORT__HEARTBEAT_INTERVAL_SECONDS=3 \
       cargo run -p raven-agent -- --config {{ agent_config }}
 
-dev-agent-fast-bunyan:
-    env \
-      RUST_LOG=debug \
-      RAVEN_METRICS__INTERVAL_SECONDS=1 \
-      RAVEN_TRANSPORT__HEARTBEAT_INTERVAL_SECONDS=3 \
-      cargo run -p raven-agent -- --config {{ agent_config }} | bunyan
-
 dev-watch-agent-fast:
     env \
       RUST_LOG=debug \
@@ -90,6 +85,29 @@ dev-watch-agent-fast:
 
 dev-watch-server:
     RUST_LOG=debug cargo watch -w crates/raven-server -w crates/raven-proto -w proto -x "run -p raven-server"
+
+dev-up:
+    docker compose -f docker-compose.dev.yml up -d
+
+dev-down:
+    docker compose -f docker-compose.dev.yml down
+
+dev-ps:
+    docker compose -f docker-compose.dev.yml ps
+
+dev-logs service="victoriametrics":
+    docker compose -f docker-compose.dev.yml logs -f {{ service }}
+
+dev-restart service="clickhouse":
+    docker compose -f docker-compose.dev.yml restart {{ service }}
+
+dev-prune:
+    docker compose -f docker-compose.dev.yml down -v --remove-orphans
+
+dev-health:
+    docker compose -f docker-compose.dev.yml ps
+    curl -fsS http://127.0.0.1:8428/health
+    curl -fsS http://127.0.0.1:8123/ping
 
 # Proto
 proto-check:
@@ -113,7 +131,7 @@ dash-preview:
 
 # Docker / Compose
 docker-build-server:
-    docker buildx -f Dockerfile.server -t raven-server:local .
+    docker buildx -f Dockerfile -t raven-server:local .
 
 compose-build:
     docker compose build

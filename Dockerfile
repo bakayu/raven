@@ -7,7 +7,7 @@ COPY dashboard/ ./
 RUN bun run build
 
 # Stage 2 - Build Rust server 
-FROM rust:1.85-slim AS rust-builder
+FROM rust:1.95-slim AS rust-builder
 RUN apt-get update && apt-get install -y protobuf-compiler pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
@@ -16,7 +16,7 @@ COPY proto/ proto/
 RUN cargo build --release -p raven-server
 
 # Stage 3 -Runtime
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /var/lib/raven /etc/raven
 
