@@ -12,6 +12,7 @@ repository = "https://github.com/bakayu/raven"
 # runtime
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
+futures = "0.3"
 
 # gRPC / Protobuf
 tonic = { version = "0.14", features = [

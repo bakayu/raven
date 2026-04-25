@@ -9,6 +9,10 @@ const DEFAULT_HTTP_LISTEN_ADDR: &str = "0.0.0.0:8080";
 const DEFAULT_GRPC_LISTEN_ADDR: &str = "0.0.0.0:9090";
 const DEFAULT_PUBLIC_BASE_URL: &str = "http://localhost:8080";
 
+const DEFAULT_TLS_ENABLED: bool = false;
+const DEFAULT_TLS_CERT_PATH: &str = "";
+const DEFAULT_TLS_KEY_PATH: &str = "";
+
 const DEFAULT_JWT_ISSUER: &str = "raven";
 const DEFAULT_JWT_AUDIENCE: &str = "raven-dashboard";
 const DEFAULT_ACCESS_TOKEN_TTL_MINUTES: u64 = 15;
@@ -24,6 +28,7 @@ const DEFAULT_OIDC_SCOPES: &[&str] = &["openid", "email", "profile"];
 #[serde(default, deny_unknown_fields)]
 pub struct RavenConfig {
     pub server: ServerConfig,
+    pub tls: TlsConfig,
     pub auth: AuthConfig,
     pub oidc: OidcConfig,
 }
@@ -34,6 +39,14 @@ pub struct ServerConfig {
     pub http_listen_addr: String,
     pub grpc_listen_addr: String,
     pub public_base_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TlsConfig {
+    pub enabled: bool,
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +87,16 @@ impl Default for ServerConfig {
     }
 }
 
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_TLS_ENABLED,
+            cert_path: DEFAULT_TLS_CERT_PATH.to_string(),
+            key_path: DEFAULT_TLS_KEY_PATH.to_string(),
+        }
+    }
+}
+
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
@@ -109,6 +132,9 @@ impl RavenConfig {
             .set_default("server.http_listen_addr", DEFAULT_HTTP_LISTEN_ADDR)?
             .set_default("server.grpc_listen_addr", DEFAULT_GRPC_LISTEN_ADDR)?
             .set_default("server.public_base_url", DEFAULT_PUBLIC_BASE_URL)?
+            .set_default("tls.enabled", DEFAULT_TLS_ENABLED)?
+            .set_default("tls.cert_path", DEFAULT_TLS_CERT_PATH)?
+            .set_default("tls.key_path", DEFAULT_TLS_KEY_PATH)?
             .set_default("auth.jwt_issuer", DEFAULT_JWT_ISSUER)?
             .set_default("auth.jwt_audience", DEFAULT_JWT_AUDIENCE)?
             .set_default(
@@ -161,6 +187,15 @@ impl RavenConfig {
 
         if self.server.public_base_url.trim().is_empty() {
             bail!("server.public_base_url cannot be empty");
+        }
+
+        if self.tls.enabled {
+            if self.tls.cert_path.trim().is_empty() {
+                bail!("tls.cert_path cannot be empty when TLS is enabled");
+            }
+            if self.tls.key_path.trim().is_empty() {
+                bail!("tls.key_path cannot be empty when TLS is enabled");
+            }
         }
 
         if self.auth.jwt_issuer.trim().is_empty() {
@@ -222,6 +257,44 @@ impl GoogleOidcConfig {
 }
 
 #[cfg(test)]
+impl RavenConfig {
+    pub fn for_test() -> Self {
+        use secrecy::SecretString;
+
+        RavenConfig {
+            server: ServerConfig {
+                http_listen_addr: "127.0.0.1:8080".into(),
+                grpc_listen_addr: "127.0.0.1:9090".into(),
+                public_base_url: "http://localhost:8080".into(),
+            },
+            tls: TlsConfig {
+                enabled: false,
+                cert_path: "".into(),
+                key_path: "".into(),
+            },
+            auth: AuthConfig {
+                jwt_issuer: "raven-test".into(),
+                jwt_audience: "raven-test".into(),
+                access_token_ttl_minutes: 15,
+                refresh_token_ttl_days: 30,
+                jwt_signing_key: SecretString::new("test_signing_key".into()),
+            },
+            oidc: OidcConfig {
+                google: GoogleOidcConfig {
+                    enabled: false,
+                    issuer: "https://accounts.google.com".into(),
+                    discovery_url: None,
+                    callback_path: "/api/auth/oidc/google/callback".into(),
+                    client_id: "".into(),
+                    client_secret: SecretString::new("".into()),
+                    scopes: vec![],
+                },
+            },
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use secrecy::ExposeSecret;
@@ -248,6 +321,11 @@ http_listen_addr = "127.0.0.1:8080"
 grpc_listen_addr = "127.0.0.1:9090"
 public_base_url = "http://localhost:8080"
 
+[tls]
+enabled = false
+cert_path = ""
+key_path = ""
+
 [auth]
 jwt_issuer = "raven"
 jwt_audience = "raven-dashboard"
@@ -272,6 +350,8 @@ scopes = ["openid", "email", "profile"]
         assert_eq!(cfg.server.http_listen_addr, "127.0.0.1:8080");
         assert_eq!(cfg.server.grpc_listen_addr, "127.0.0.1:9090");
         assert_eq!(cfg.server.public_base_url, "http://localhost:8080");
+
+        assert!(!cfg.tls.enabled);
 
         assert_eq!(cfg.auth.jwt_issuer, "raven");
         assert_eq!(cfg.auth.jwt_audience, "raven-dashboard");

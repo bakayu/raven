@@ -3,6 +3,11 @@ http_listen_addr = "0.0.0.0:8080"
 grpc_listen_addr = "0.0.0.0:9090"
 public_base_url = "http://localhost:8080"
 
+[tls]
+enabled = false
+cert_path = ""
+key_path = ""
+
 [auth]
 jwt_issuer = "raven"
 jwt_audience = "raven-dashboard"
