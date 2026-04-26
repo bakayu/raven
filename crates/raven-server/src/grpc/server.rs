@@ -67,6 +67,12 @@ impl RavenServer {
                 "metrics batch received"
             );
 
+            self.state
+                .vm_client
+                .write(&batch)
+                .await
+                .map_err(Status::from)?;
+
             batches += 1;
         }
 
@@ -105,6 +111,12 @@ impl RavenServer {
                 sent_at = %sent_at,
                 "log batch received"
             );
+
+            self.state
+                .ch_client
+                .write_logs(&batch)
+                .await
+                .map_err(Status::from)?;
 
             batches += 1;
             total_entries += batch.entries.len();
