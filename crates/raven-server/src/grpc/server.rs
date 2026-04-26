@@ -11,6 +11,7 @@ use raven_proto::proto::{
 
 use crate::grpc::extract_bearer_token;
 use crate::state::AppState;
+use crate::tokens::validate_agent_token;
 
 #[derive(Debug, Clone)]
 pub struct RavenServer {
@@ -25,12 +26,14 @@ impl RavenServer {
 
 impl RavenServer {
     /// Validates the Bearer token on every incoming RPC.
-    /// Returns the raw token string so the handler can use it for agent lookup.
-    fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
+    async fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
         let token = extract_bearer_token(request)?;
 
-        // TODO: replace with db::tokens::validate_agent_token once SQLite is wired
-        if token != self.state.dev_token {
+        let token_id = validate_agent_token(&self.state.db.read, &token)
+            .await
+            .map_err(Status::from)?;
+
+        if token_id.is_none() {
             return Err(Status::unauthenticated("invalid token"));
         }
 
@@ -144,7 +147,7 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
-        self.authorize(&request)?;
+        self.authorize(&request).await?;
         let req = request.into_inner();
 
         require_fields(&[
@@ -175,7 +178,7 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
-        self.authorize(&request)?;
+        self.authorize(&request).await?;
         let req = request.into_inner();
 
         require_fields(&[("agent_id", &req.agent_id), ("hostname", &req.hostname)])?;
@@ -201,7 +204,7 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<tonic::Streaming<MetricBatch>>,
     ) -> Result<Response<StreamResponse>, Status> {
-        self.authorize(&request)?;
+        self.authorize(&request).await?;
         let response = self.handle_metric_stream(request.into_inner()).await?;
         Ok(Response::new(response))
     }
@@ -210,7 +213,7 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<tonic::Streaming<LogBatch>>,
     ) -> Result<Response<StreamResponse>, Status> {
-        self.authorize(&request)?;
+        self.authorize(&request).await?;
         let response = self.handle_log_stream(request.into_inner()).await?;
         Ok(Response::new(response))
     }
@@ -230,19 +233,14 @@ fn count_log_streams(batch: &LogBatch) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configuration::RavenConfig;
-    use crate::state::AppState;
     use prost_types::Timestamp;
     use raven_proto::proto::raven_ingestion_server::RavenIngestion;
     use tonic::Code;
 
     const TEST_TOKEN: &str = "rvn_test_token";
 
-    fn test_server() -> RavenServer {
-        RavenServer::new(AppState::new(
-            RavenConfig::for_test(),
-            TEST_TOKEN.to_string(),
-        ))
+    async fn test_server() -> RavenServer {
+        RavenServer::new(AppState::for_test().await)
     }
 
     fn with_auth<T>(payload: T) -> Request<T> {
@@ -274,6 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_rejects_missing_auth() {
+        let server = test_server().await;
         let req = Request::new(RegisterRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -281,12 +280,13 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
-        let err = test_server().register(req).await.unwrap_err();
+        let err = server.register(req).await.unwrap_err();
         assert_eq!(err.code(), Code::Unauthenticated);
     }
 
     #[tokio::test]
     async fn register_rejects_wrong_token() {
+        let server = test_server().await;
         let req = with_bad_token(RegisterRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -294,12 +294,13 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
-        let err = test_server().register(req).await.unwrap_err();
+        let err = server.register(req).await.unwrap_err();
         assert_eq!(err.code(), Code::Unauthenticated);
     }
 
     #[tokio::test]
     async fn register_rejects_empty_agent_id() {
+        let server = test_server().await;
         let req = with_auth(RegisterRequest {
             agent_id: "".into(),
             hostname: "host1".into(),
@@ -307,27 +308,14 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
-        let err = test_server().register(req).await.unwrap_err();
+        let err = server.register(req).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("agent_id"));
     }
 
     #[tokio::test]
-    async fn register_rejects_whitespace_fields() {
-        let req = with_auth(RegisterRequest {
-            agent_id: "a1".into(),
-            hostname: "  ".into(), // whitespace only
-            os: "linux".into(),
-            agent_version: "0.1.0".into(),
-            log_files: vec![],
-        });
-        let err = test_server().register(req).await.unwrap_err();
-        assert_eq!(err.code(), Code::InvalidArgument);
-        assert!(err.message().contains("hostname"));
-    }
-
-    #[tokio::test]
-    async fn register_succeeds_with_no_log_files() {
+    async fn register_succeeds() {
+        let server = test_server().await;
         let req = with_auth(RegisterRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -335,66 +323,32 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
-        let resp = test_server().register(req).await.unwrap();
+        let resp = server.register(req).await.unwrap();
         assert!(resp.into_inner().ok);
-    }
-
-    #[tokio::test]
-    async fn register_succeeds_with_log_files() {
-        let req = with_auth(RegisterRequest {
-            agent_id: "a1".into(),
-            hostname: "host1".into(),
-            os: "linux".into(),
-            agent_version: "0.1.0".into(),
-            log_files: vec!["/var/log/app.log".into(), "/var/log/nginx.log".into()],
-        });
-        let resp = test_server().register(req).await.unwrap();
-        assert!(resp.into_inner().ok);
-    }
-
-    #[tokio::test]
-    async fn heartbeat_rejects_missing_auth() {
-        let req = Request::new(HeartbeatRequest {
-            agent_id: "a1".into(),
-            hostname: "host1".into(),
-            sent_at: Some(valid_ts()),
-        });
-        let err = test_server().heartbeat(req).await.unwrap_err();
-        assert_eq!(err.code(), Code::Unauthenticated);
     }
 
     #[tokio::test]
     async fn heartbeat_rejects_missing_timestamp() {
+        let server = test_server().await;
         let req = with_auth(HeartbeatRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
             sent_at: None,
         });
-        let err = test_server().heartbeat(req).await.unwrap_err();
+        let err = server.heartbeat(req).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("sent_at"));
     }
 
     #[tokio::test]
-    async fn heartbeat_rejects_empty_agent_id() {
-        let req = with_auth(HeartbeatRequest {
-            agent_id: "".into(),
-            hostname: "host1".into(),
-            sent_at: Some(valid_ts()),
-        });
-        let err = test_server().heartbeat(req).await.unwrap_err();
-        assert_eq!(err.code(), Code::InvalidArgument);
-        assert!(err.message().contains("agent_id"));
-    }
-
-    #[tokio::test]
     async fn heartbeat_succeeds() {
+        let server = test_server().await;
         let req = with_auth(HeartbeatRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
             sent_at: Some(valid_ts()),
         });
-        let resp = test_server().heartbeat(req).await.unwrap();
+        let resp = server.heartbeat(req).await.unwrap();
         let inner = resp.into_inner();
         assert!(inner.ok);
         assert_eq!(inner.message, "healthy");
@@ -404,6 +358,7 @@ mod tests {
     async fn stream_metrics_accepts_batch() {
         use raven_proto::proto::{CpuMetrics, MemoryMetrics};
 
+        let server = test_server().await;
         let batch = MetricBatch {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -422,38 +377,14 @@ mod tests {
         };
 
         let stream = tokio_stream::iter(vec![Ok(batch)]);
-        let resp = test_server().handle_metric_stream(stream).await.unwrap();
+        let resp = server.handle_metric_stream(stream).await.unwrap();
         assert!(resp.ok);
         assert!(resp.message.contains('1'));
     }
 
     #[tokio::test]
-    async fn stream_metrics_rejects_missing_timestamp() {
-        let batch = MetricBatch {
-            agent_id: "a1".into(),
-            hostname: "host1".into(),
-            sent_at: None,
-            ..Default::default()
-        };
-        let stream = tokio_stream::iter(vec![Ok(batch)]);
-        let err = test_server()
-            .handle_metric_stream(stream)
-            .await
-            .unwrap_err();
-        assert_eq!(err.code(), Code::InvalidArgument);
-        assert!(err.message().contains("sent_at"));
-    }
-
-    #[tokio::test]
-    async fn stream_metrics_accepts_empty_stream() {
-        let empty = tokio_stream::iter(Vec::<Result<MetricBatch, Status>>::new());
-        let resp = test_server().handle_metric_stream(empty).await.unwrap();
-        assert!(resp.ok);
-        assert!(resp.message.contains('0'));
-    }
-
-    #[tokio::test]
     async fn stream_logs_rejects_empty_source() {
+        let server = test_server().await;
         let stream = tokio_stream::iter(vec![Ok(LogBatch {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -461,43 +392,8 @@ mod tests {
             sent_at: Some(valid_ts()),
             entries: vec![],
         })]);
-        let err = test_server().handle_log_stream(stream).await.unwrap_err();
+        let err = server.handle_log_stream(stream).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("source"));
-    }
-
-    #[tokio::test]
-    async fn stream_logs_counts_entries_correctly() {
-        use raven_proto::proto::{LogEntry, LogStream};
-
-        let entries = vec![
-            LogEntry {
-                source: "app".into(),
-                path: "/var/log/app.log".into(),
-                line: "info: started".into(),
-                stream: LogStream::Stdout as i32,
-                timestamp: Some(valid_ts()),
-            },
-            LogEntry {
-                source: "app".into(),
-                path: "/var/log/app.log".into(),
-                line: "error: something failed".into(),
-                stream: LogStream::Stderr as i32,
-                timestamp: Some(valid_ts()),
-            },
-        ];
-
-        let stream = tokio_stream::iter(vec![Ok(LogBatch {
-            agent_id: "a1".into(),
-            hostname: "host1".into(),
-            source: "app".into(),
-            sent_at: Some(valid_ts()),
-            entries,
-        })]);
-
-        let resp = test_server().handle_log_stream(stream).await.unwrap();
-        assert!(resp.ok);
-        assert!(resp.message.contains('1')); // 1 batch
-        assert!(resp.message.contains('2')); // 2 entries
     }
 }

@@ -15,6 +15,11 @@ access_token_ttl_minutes = 15
 refresh_token_ttl_days = 30
 jwt_signing_key = "CHANGE_ME_LONG_RANDOM_SECRET"
 
+[database]
+sqlite_path = "./raven-dev.db"
+victoria_metrics_url = "http://localhost:8428"
+clickhouse_url = "http://localhost:8123"
+
 [oidc.google]
 enabled = false
 # Google OIDC issuer

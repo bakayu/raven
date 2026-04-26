@@ -74,6 +74,7 @@ hostname = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.11"
+hex = "0.4"
 dashmap = "6"
 rand = "0.10"
 thiserror = "2"

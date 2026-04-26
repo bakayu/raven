@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO agent_tokens (name, token_hash, created_by)\n        VALUES (?, ?, 'system')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "32a1de0607e749202e4d88b30955406ffb275613047d06ddae3635666e4997ac"
+}
