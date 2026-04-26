@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use reqwest::Client;
 use tracing::{debug, warn};
 
@@ -14,7 +16,10 @@ pub struct VictoriaMetricsClient {
 impl VictoriaMetricsClient {
     pub fn new(base_url: &str) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("reqwest client"),
             base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
@@ -263,5 +268,66 @@ fn metric(name: &str, labels: &[(&str, &str)], value: f64, ts_ms: i64) -> String
         format!("{name}{{{label_str}}} {value} {ts_ms}")
     } else {
         format!("{name}{{{label_str}}} {value}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::prelude::*;
+    use prost_types::Timestamp;
+    use raven_proto::proto::{CpuMetrics, MetricBatch};
+
+    fn ts(seconds: i64) -> Timestamp {
+        Timestamp { seconds, nanos: 0 }
+    }
+
+    #[test]
+    fn build_prometheus_lines_includes_cpu_and_timestamp() {
+        let batch = MetricBatch {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            sent_at: Some(ts(1_700_000_000)),
+            cpu: Some(CpuMetrics {
+                total_usage_percent: 42.5,
+                per_core_usage_percent: vec![40.0, 45.0],
+            }),
+            ..Default::default()
+        };
+
+        let lines = build_prometheus_lines(&batch);
+
+        let ts_ms = 1_700_000_000i64 * 1000;
+        assert!(lines.contains(&format!(
+            "raven_cpu_usage_percent{{hostname=\"host1\"}} 42.5 {ts_ms}"
+        )));
+        assert!(lines.contains("raven_cpu_core_usage_percent"));
+    }
+
+    #[tokio::test]
+    async fn write_posts_to_import_endpoint() {
+        let server = MockServer::start_async().await;
+
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/api/v1/import/prometheus");
+            // .header("content-type", "text/plain");
+            then.status(200);
+        });
+
+        let client = VictoriaMetricsClient::new(&server.base_url());
+
+        let batch = MetricBatch {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            sent_at: Some(ts(1_700_000_000)),
+            cpu: Some(CpuMetrics {
+                total_usage_percent: 42.5,
+                per_core_usage_percent: vec![40.0, 45.0],
+            }),
+            ..Default::default()
+        };
+
+        client.write(&batch).await.expect("write metrics");
+        mock.assert();
     }
 }

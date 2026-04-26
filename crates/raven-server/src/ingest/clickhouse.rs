@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use chrono::{TimeZone, Utc};
 use reqwest::{Client, Url};
 use serde_json::{Value, json};
@@ -16,7 +18,10 @@ pub struct ClickHouseClient {
 impl ClickHouseClient {
     pub fn new(base_url: &str) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("reqwest client"),
             base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
@@ -192,4 +197,122 @@ fn build_json_rows(batch: &LogBatch) -> Vec<Value> {
             }))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::prelude::*;
+    use prost_types::Timestamp;
+    use raven_proto::proto::{LogBatch, LogEntry, LogStream};
+
+    fn ts(seconds: i64) -> Timestamp {
+        Timestamp { seconds, nanos: 0 }
+    }
+
+    #[test]
+    fn build_json_rows_uses_entry_or_batch_timestamp_and_stream_label() {
+        let batch = LogBatch {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            source: "app".into(),
+            sent_at: Some(ts(1_700_000_000)),
+            entries: vec![
+                LogEntry {
+                    source: "app".into(),
+                    path: "/var/log/app.log".into(),
+                    line: "hello".into(),
+                    stream: LogStream::Stdout as i32,
+                    timestamp: Some(ts(1_700_000_100)),
+                },
+                LogEntry {
+                    source: "app".into(),
+                    path: "/var/log/app.log".into(),
+                    line: "world".into(),
+                    stream: LogStream::Stderr as i32,
+                    timestamp: None,
+                },
+            ],
+        };
+
+        let rows = build_json_rows(&batch);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["stream"], "stdout");
+        assert_eq!(rows[1]["stream"], "stderr");
+
+        let expected_sent_at = Utc
+            .timestamp_opt(1_700_000_000, 0)
+            .single()
+            .unwrap()
+            .format("%Y-%m-%d %H:%M:%S%.3f")
+            .to_string();
+
+        assert_eq!(rows[1]["timestamp"], expected_sent_at);
+    }
+
+    #[tokio::test]
+    async fn write_logs_posts_ndjson_with_query() {
+        let server = MockServer::start_async().await;
+
+        let mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/")
+                .query_param("query", "INSERT INTO logs FORMAT JSONEachRow");
+            // .header("content-type", "application/x-ndjson");
+            then.status(200);
+        });
+
+        let client = ClickHouseClient::new(&server.base_url());
+
+        let batch = LogBatch {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            source: "app".into(),
+            sent_at: Some(ts(1_700_000_000)),
+            entries: vec![LogEntry {
+                source: "app".into(),
+                path: "/var/log/app.log".into(),
+                line: "hello".into(),
+                stream: LogStream::Stdout as i32,
+                timestamp: Some(ts(1_700_000_000)),
+            }],
+        };
+
+        client.write_logs(&batch).await.expect("write logs");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn write_logs_returns_error_on_non_success() {
+        let server = MockServer::start_async().await;
+
+        let mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/")
+                .query_param("query", "INSERT INTO logs FORMAT JSONEachRow");
+            then.status(500).body("boom");
+        });
+
+        let client = ClickHouseClient::new(&server.base_url());
+
+        let batch = LogBatch {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            source: "app".into(),
+            sent_at: Some(ts(1_700_000_000)),
+            entries: vec![LogEntry {
+                source: "app".into(),
+                path: "/var/log/app.log".into(),
+                line: "hello".into(),
+                stream: LogStream::Stdout as i32,
+                timestamp: Some(ts(1_700_000_000)),
+            }],
+        };
+
+        let err = client.write_logs(&batch).await.expect_err("should fail");
+        assert!(matches!(err, AppError::ClickHouse(_)));
+
+        mock.assert();
+    }
 }

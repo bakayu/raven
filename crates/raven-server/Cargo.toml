@@ -35,3 +35,7 @@ secrecy = { workspace = true }
 jsonwebtoken = { workspace = true }
 argon2 = { workspace = true }
 dashmap = { workspace = true }
+
+[dev-dependencies]
+httpmock = "0.7"
+urlencoding = "2"

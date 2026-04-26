@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use tokio::sync::broadcast;
 use tracing::info;
+
+use raven_proto::proto::LogBatch;
 
 use crate::{
     ClickHouseClient, Db, VictoriaMetricsClient,
@@ -17,6 +20,7 @@ pub struct AppState {
     pub agents: Arc<DashMap<String, AgentState>>,
     pub vm_client: Arc<VictoriaMetricsClient>,
     pub ch_client: Arc<ClickHouseClient>,
+    pub log_tx: broadcast::Sender<LogBatch>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +45,7 @@ impl AppState {
             agents: Arc::new(DashMap::new()),
             vm_client: Arc::new(vm),
             ch_client: Arc::new(ch),
+            log_tx: broadcast::channel(1024).0,
         };
 
         state.ch_client.ensure_schema().await?;
@@ -93,6 +98,7 @@ impl AppState {
             agents: Arc::new(DashMap::new()),
             vm_client: Arc::new(vm_client),
             ch_client: Arc::new(ch_client),
+            log_tx: broadcast::channel(1024).0,
         };
 
         state.ch_client.ensure_schema().await.unwrap();

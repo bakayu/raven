@@ -12,11 +12,22 @@ env:
   SQLX_VERSION: 0.8.6
   SQLX_FEATURES: "sqlite"
   DATABASE_URL: "sqlite://./.ci/sqlx-ci.db"
+  RAVEN_DATABASE__CLICKHOUSE_URL: "http://localhost:8123"
+  RAVEN_DATABASE__VICTORIA_METRICS_URL: "http://localhost:8428"
 
 jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.3
+        ports:
+          - 8123:8123
+      victoriametrics:
+        image: victoriametrics/victoria-metrics:v1.104.0
+        ports:
+          - 8428:8428
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
@@ -54,8 +65,17 @@ jobs:
         with:
           tool: cargo-tarpaulin
 
+      - name: Wait for ClickHouse + VictoriaMetrics
+        run: |
+          for i in {1..30}; do
+            curl -fsS http://localhost:8123/ping && break || sleep 1
+          done
+          for i in {1..30}; do
+            curl -fsS http://localhost:8428/-/ready && break || sleep 1
+          done
+
       - name: Generate code coverage
-        run: cargo tarpaulin --verbose --workspace --out xml
+        run: cargo tarpaulin --verbose --workspace --out xml -- --ignored
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

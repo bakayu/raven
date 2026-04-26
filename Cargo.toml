@@ -26,14 +26,16 @@ tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 
 # HTTP
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+axum-extra = { version = "0.12", features = ["cookie", "typed-header"] }
+tower = "0.5"
 reqwest = { version = "0.13", features = ["json"] }
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
+toml = "1"
 
 # Database
 sqlx = { version = "0.8", features = [
@@ -80,3 +82,5 @@ rand = "0.10"
 thiserror = "2"
 anyhow = "1"
 config = "0.15"
+cookie = { version = "0.18", features = ["secure", "percent-encode"] }
+time = "0.3"

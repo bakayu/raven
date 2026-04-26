@@ -12,11 +12,22 @@ env:
   SQLX_VERSION: 0.8.6
   SQLX_FEATURES: "sqlite"  
   DATABASE_URL: "sqlite://./.ci/sqlx-ci.db"
+  RAVEN_DATABASE__CLICKHOUSE_URL: "http://localhost:8123"
+  RAVEN_DATABASE__VICTORIA_METRICS_URL: "http://localhost:8428"
 
 jobs:
   build-and-test:
     name: Build + Test
     runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.3
+        ports:
+          - 8123:8123
+      victoriametrics:
+        image: victoriametrics/victoria-metrics:v1.104.0
+        ports:
+          - 8428:8428
     steps:
       - uses: actions/checkout@v4
 
@@ -44,8 +55,20 @@ jobs:
           sqlx database create
           sqlx migrate run --source crates/raven-server/migrations
 
+      - name: Wait for ClickHouse + VictoriaMetrics
+        run: |
+          for i in {1..30}; do
+            curl -fsS http://localhost:8123/ping && break || sleep 1
+          done
+          for i in {1..30}; do
+            curl -fsS http://localhost:8428/-/ready && break || sleep 1
+          done
+
       - name: cargo build
         run: cargo build --all
 
-      - name: cargo test
+      - name: cargo test (unit)
         run: cargo test --all
+
+      - name: cargo test (integration)
+        run: cargo test --all -- --ignored

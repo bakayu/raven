@@ -1,10 +1,10 @@
-mod configuration;
-mod db;
-mod error;
-mod grpc;
-mod ingest;
-mod state;
-mod telemetry;
+pub mod configuration;
+pub mod db;
+pub mod error;
+pub mod grpc;
+pub mod ingest;
+pub mod state;
+pub mod telemetry;
 
 pub use configuration::RavenConfig;
 pub use db::{Db, agents, tokens};
