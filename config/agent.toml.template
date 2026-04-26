@@ -14,7 +14,7 @@ batch_size = 100
 flush_interval_seconds = 5
 retry_max_interval_seconds = 60
 wal_max_size_mb = 100
-# Optional WAL file path override
+# Optional WAL file path override (default: /var/lib/raven/transport.wal)
 # wal_path = "__WAL_PATH__"
 heartbeat_interval_seconds = 30
 channel_capacity = 4096

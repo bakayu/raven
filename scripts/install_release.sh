@@ -8,7 +8,7 @@ TOKEN=""
 TLS="false"
 
 usage() {
-  echo "Usage: $0 --version v0.1.0-alpha.1 --server 1.2.3.4:9090 --token rvn_xxx [--tls true|false]"
+  echo "Usage: $0 --version [latest|v0.1.0-alpha.1] --server 1.2.3.4:9090 --token rvn_xxx [--tls true|false]"
   exit 1
 }
 
