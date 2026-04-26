@@ -273,6 +273,7 @@ mod tests {
     #[tokio::test]
     async fn register_rejects_missing_auth() {
         let server = test_server().await;
+
         let req = Request::new(RegisterRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -280,6 +281,7 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
+
         let err = server.register(req).await.unwrap_err();
         assert_eq!(err.code(), Code::Unauthenticated);
     }
@@ -287,6 +289,7 @@ mod tests {
     #[tokio::test]
     async fn register_rejects_wrong_token() {
         let server = test_server().await;
+
         let req = with_bad_token(RegisterRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -294,6 +297,7 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
+
         let err = server.register(req).await.unwrap_err();
         assert_eq!(err.code(), Code::Unauthenticated);
     }
@@ -301,6 +305,7 @@ mod tests {
     #[tokio::test]
     async fn register_rejects_empty_agent_id() {
         let server = test_server().await;
+
         let req = with_auth(RegisterRequest {
             agent_id: "".into(),
             hostname: "host1".into(),
@@ -308,6 +313,7 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
+
         let err = server.register(req).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("agent_id"));
@@ -316,6 +322,7 @@ mod tests {
     #[tokio::test]
     async fn register_succeeds() {
         let server = test_server().await;
+
         let req = with_auth(RegisterRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -323,18 +330,35 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
+
         let resp = server.register(req).await.unwrap();
         assert!(resp.into_inner().ok);
     }
 
     #[tokio::test]
+    async fn heartbeat_rejects_missing_auth() {
+        let server = test_server().await;
+
+        let req = Request::new(HeartbeatRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            sent_at: Some(valid_ts()),
+        });
+
+        let err = server.heartbeat(req).await.unwrap_err();
+        assert_eq!(err.code(), Code::Unauthenticated);
+    }
+
+    #[tokio::test]
     async fn heartbeat_rejects_missing_timestamp() {
         let server = test_server().await;
+
         let req = with_auth(HeartbeatRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
             sent_at: None,
         });
+
         let err = server.heartbeat(req).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("sent_at"));
@@ -343,13 +367,16 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_succeeds() {
         let server = test_server().await;
+
         let req = with_auth(HeartbeatRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
             sent_at: Some(valid_ts()),
         });
+
         let resp = server.heartbeat(req).await.unwrap();
         let inner = resp.into_inner();
+
         assert!(inner.ok);
         assert_eq!(inner.message, "healthy");
     }
@@ -359,6 +386,7 @@ mod tests {
         use raven_proto::proto::{CpuMetrics, MemoryMetrics};
 
         let server = test_server().await;
+
         let batch = MetricBatch {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -378,13 +406,33 @@ mod tests {
 
         let stream = tokio_stream::iter(vec![Ok(batch)]);
         let resp = server.handle_metric_stream(stream).await.unwrap();
+
         assert!(resp.ok);
         assert!(resp.message.contains('1'));
     }
 
     #[tokio::test]
+    async fn stream_metrics_rejects_missing_timestamp() {
+        let server = test_server().await;
+
+        let batch = MetricBatch {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            sent_at: None,
+            ..Default::default()
+        };
+
+        let stream = tokio_stream::iter(vec![Ok(batch)]);
+        let err = server.handle_metric_stream(stream).await.unwrap_err();
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("sent_at"));
+    }
+
+    #[tokio::test]
     async fn stream_logs_rejects_empty_source() {
         let server = test_server().await;
+
         let stream = tokio_stream::iter(vec![Ok(LogBatch {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -392,8 +440,47 @@ mod tests {
             sent_at: Some(valid_ts()),
             entries: vec![],
         })]);
+
         let err = server.handle_log_stream(stream).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("source"));
+    }
+
+    #[tokio::test]
+    async fn stream_logs_counts_entries_correctly() {
+        use raven_proto::proto::{LogEntry, LogStream};
+
+        let server = test_server().await;
+
+        let entries = vec![
+            LogEntry {
+                source: "app".into(),
+                path: "/var/log/app.log".into(),
+                line: "info: started".into(),
+                stream: LogStream::Stdout as i32,
+                timestamp: Some(valid_ts()),
+            },
+            LogEntry {
+                source: "app".into(),
+                path: "/var/log/app.log".into(),
+                line: "error: something failed".into(),
+                stream: LogStream::Stderr as i32,
+                timestamp: Some(valid_ts()),
+            },
+        ];
+
+        let stream = tokio_stream::iter(vec![Ok(LogBatch {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            source: "app".into(),
+            sent_at: Some(valid_ts()),
+            entries,
+        })]);
+
+        let resp = server.handle_log_stream(stream).await.unwrap();
+
+        assert!(resp.ok);
+        assert!(resp.message.contains('1'));
+        assert!(resp.message.contains('2'));
     }
 }
