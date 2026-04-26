@@ -1,10 +1,22 @@
-use crate::{Db, configuration::RavenConfig};
 use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use dashmap::DashMap;
+
+use crate::{Db, configuration::RavenConfig};
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub config: Arc<RavenConfig>,
     pub db: Arc<Db>,
+    pub agents: Arc<DashMap<String, AgentState>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentState {
+    pub hostname: String,
+    pub agent_id: String,
+    pub last_heartbeat: DateTime<Utc>,
 }
 
 impl AppState {
@@ -12,6 +24,7 @@ impl AppState {
         Self {
             config: Arc::new(config),
             db: Arc::new(db),
+            agents: Arc::new(DashMap::new()),
         }
     }
 }
@@ -37,9 +50,26 @@ impl AppState {
             .await
             .unwrap();
 
-        AppState {
-            config: std::sync::Arc::new(RavenConfig::for_test()),
-            db: std::sync::Arc::new(db),
+        let state = AppState {
+            config: Arc::new(RavenConfig::for_test()),
+            db: Arc::new(db),
+            agents: Arc::new(DashMap::new()),
+        };
+
+        let known_agents = crate::db::agents::load_all_agents(&state.db.read)
+            .await
+            .expect("load known agents");
+        for (token_id, hostname, last_seen) in known_agents {
+            state.agents.insert(
+                token_id.clone(),
+                AgentState {
+                    agent_id: token_id,
+                    hostname,
+                    last_heartbeat: last_seen,
+                },
+            );
         }
+
+        state
     }
 }

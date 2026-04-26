@@ -154,3 +154,6 @@ compose-restart service="raven-server":
 
 compose-prune:
     docker compose down -v --remove-orphans
+
+db-clean:
+    rm raven-dev.db raven-dev.db-shm raven-dev.db-wal 2>/dev/null; true

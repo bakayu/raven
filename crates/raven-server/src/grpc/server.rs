@@ -9,6 +9,7 @@ use raven_proto::proto::{
     RegisterRequest, RegisterResponse, StreamResponse,
 };
 
+use crate::AgentState;
 use crate::db::agents::{update_last_seen, upsert_agent};
 use crate::db::tokens::validate_agent_token;
 use crate::grpc::extract_bearer_token;
@@ -155,9 +156,20 @@ impl RavenIngestion for RavenServer {
             ("agent_version", &req.agent_version),
         ])?;
 
+        // persist to SQLite
         upsert_agent(&self.state.db.write, &req, token_id.as_str(), ip.as_deref())
             .await
             .map_err(Status::from)?;
+
+        // update live state
+        self.state.agents.insert(
+            token_id.clone(),
+            AgentState {
+                agent_id: token_id,
+                hostname: req.hostname.clone(),
+                last_heartbeat: Utc::now(),
+            },
+        );
 
         info!(
             agent_id = %req.agent_id,
@@ -185,7 +197,13 @@ impl RavenIngestion for RavenServer {
 
         let sent_at = parse_timestamp(req.sent_at.as_ref(), "sent_at")?;
 
+        // persist to SQLite
         update_last_seen(&self.state.db.write, token_id.as_str(), &req.hostname).await?;
+
+        // update live state
+        if let Some(mut entry) = self.state.agents.get_mut(&token_id) {
+            entry.last_heartbeat = Utc::now();
+        }
 
         info!(
             agent_id = %req.agent_id,
@@ -549,5 +567,79 @@ mod tests {
         .expect("fetch updated last_seen_at");
 
         assert_ne!(updated, old_value);
+    }
+
+    #[tokio::test]
+    async fn register_populates_live_agent_state() {
+        let server = test_server().await;
+        let req = with_auth(RegisterRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            os: "linux".into(),
+            agent_version: "0.1.0".into(),
+            log_files: vec![],
+        });
+
+        server.register(req).await.expect("register should succeed");
+
+        let token_id = validate_agent_token(&server.state.db.read, TEST_TOKEN)
+            .await
+            .expect("token validation")
+            .expect("token exists");
+
+        let entry = server
+            .state
+            .agents
+            .get(&token_id)
+            .expect("agent should be in live map");
+        assert_eq!(entry.hostname, "host1");
+        assert_eq!(entry.agent_id, token_id);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_updates_live_agent_state_timestamp() {
+        let server = test_server().await;
+        let register_req = with_auth(RegisterRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            os: "linux".into(),
+            agent_version: "0.1.0".into(),
+            log_files: vec![],
+        });
+        server
+            .register(register_req)
+            .await
+            .expect("register should succeed");
+
+        let token_id = validate_agent_token(&server.state.db.read, TEST_TOKEN)
+            .await
+            .expect("token validation")
+            .expect("token exists");
+
+        let old = chrono::DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+
+        {
+            let mut entry = server
+                .state
+                .agents
+                .get_mut(&token_id)
+                .expect("live map entry");
+            entry.last_heartbeat = old;
+        }
+
+        let hb = with_auth(HeartbeatRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            sent_at: Some(valid_ts()),
+        });
+        server
+            .heartbeat(hb)
+            .await
+            .expect("heartbeat should succeed");
+
+        let updated = server.state.agents.get(&token_id).expect("live map entry");
+        assert!(updated.last_heartbeat > old);
     }
 }

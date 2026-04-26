@@ -34,3 +34,4 @@ config = { workspace = true }
 secrecy = { workspace = true }
 jsonwebtoken = { workspace = true }
 argon2 = { workspace = true }
+dashmap = { workspace = true }
