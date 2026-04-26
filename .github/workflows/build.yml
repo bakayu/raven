@@ -10,10 +10,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   SQLX_VERSION: 0.8.6
-  SQLX_FEATURES: "sqlite"  
+  SQLX_FEATURES: "sqlite"
   DATABASE_URL: "sqlite://./.ci/sqlx-ci.db"
-  RAVEN_DATABASE__CLICKHOUSE_URL: "http://localhost:8123"
-  RAVEN_DATABASE__VICTORIA_METRICS_URL: "http://localhost:8428"
 
 jobs:
   build-and-test:
@@ -21,9 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     services:
       clickhouse:
-        image: clickhouse/clickhouse-server:24.3
+        image: clickhouse/clickhouse-server:26.2-alpine
         ports:
           - 8123:8123
+        env:
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: ""
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
       victoriametrics:
         image: victoriametrics/victoria-metrics:v1.104.0
         ports:
@@ -71,4 +73,7 @@ jobs:
         run: cargo test --all
 
       - name: cargo test (integration)
+        env:
+          RAVEN_DATABASE__CLICKHOUSE_URL: "http://localhost:8123"
+          RAVEN_DATABASE__VICTORIA_METRICS_URL: "http://localhost:8428"
         run: cargo test --all -- --ignored
