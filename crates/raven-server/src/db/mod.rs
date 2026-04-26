@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod tokens;
 
 use sqlx::{

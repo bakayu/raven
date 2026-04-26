@@ -1,5 +1,6 @@
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
+use tracing::{error, warn};
 
 use crate::error::AppResult;
 
@@ -10,6 +11,11 @@ pub fn hash_token(raw: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+#[tracing::instrument(
+    name="validating agent token",
+    skip(db, raw_token),
+    fields(token_hash = %hash_token(raw_token))
+)]
 pub async fn validate_agent_token(db: &SqlitePool, raw_token: &str) -> AppResult<Option<String>> {
     let hash = hash_token(raw_token);
 
@@ -23,7 +29,15 @@ pub async fn validate_agent_token(db: &SqlitePool, raw_token: &str) -> AppResult
         hash
     )
     .fetch_optional(db)
-    .await?;
+    .await
+    .map_err(|e| {
+        error!(error = %e, "failed to validate agent token");
+        e
+    })?;
+
+    if row.is_none() {
+        warn!("agent token not found or revoked");
+    }
 
     Ok(row.map(|r| r.id))
 }

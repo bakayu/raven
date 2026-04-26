@@ -9,9 +9,10 @@ use raven_proto::proto::{
     RegisterRequest, RegisterResponse, StreamResponse,
 };
 
+use crate::db::agents::{update_last_seen, upsert_agent};
+use crate::db::tokens::validate_agent_token;
 use crate::grpc::extract_bearer_token;
 use crate::state::AppState;
-use crate::tokens::validate_agent_token;
 
 #[derive(Debug, Clone)]
 pub struct RavenServer {
@@ -26,18 +27,13 @@ impl RavenServer {
 
 impl RavenServer {
     /// Validates the Bearer token on every incoming RPC.
-    async fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
+    async fn authorize<T>(&self, request: &Request<T>) -> Result<String, Status> {
         let token = extract_bearer_token(request)?;
 
-        let token_id = validate_agent_token(&self.state.db.read, &token)
+        validate_agent_token(&self.state.db.write, &token)
             .await
-            .map_err(Status::from)?;
-
-        if token_id.is_none() {
-            return Err(Status::unauthenticated("invalid token"));
-        }
-
-        Ok(())
+            .map_err(Status::from)?
+            .ok_or_else(|| Status::unauthenticated("Invalid token"))
     }
 
     async fn handle_metric_stream(
@@ -147,7 +143,9 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
-        self.authorize(&request).await?;
+        let token_id = self.authorize(&request).await?;
+
+        let ip = request.remote_addr().map(|addr| addr.ip().to_string());
         let req = request.into_inner();
 
         require_fields(&[
@@ -157,7 +155,9 @@ impl RavenIngestion for RavenServer {
             ("agent_version", &req.agent_version),
         ])?;
 
-        // TODO: db::agents::upsert_agent(&self.state.db.write, &req).await.map_err(Status::from)?;
+        upsert_agent(&self.state.db.write, &req, token_id.as_str(), ip.as_deref())
+            .await
+            .map_err(Status::from)?;
 
         info!(
             agent_id = %req.agent_id,
@@ -178,14 +178,14 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
-        self.authorize(&request).await?;
+        let token_id = self.authorize(&request).await?;
         let req = request.into_inner();
 
         require_fields(&[("agent_id", &req.agent_id), ("hostname", &req.hostname)])?;
 
         let sent_at = parse_timestamp(req.sent_at.as_ref(), "sent_at")?;
 
-        // TODO: db::agents::update_last_seen(&self.state.db.write, &req.agent_id).await.map_err(Status::from)?;
+        update_last_seen(&self.state.db.write, token_id.as_str(), &req.hostname).await?;
 
         info!(
             agent_id = %req.agent_id,
@@ -368,6 +368,19 @@ mod tests {
     async fn heartbeat_succeeds() {
         let server = test_server().await;
 
+        let register_req = with_auth(RegisterRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            os: "linux".into(),
+            agent_version: "0.1.0".into(),
+            log_files: vec![],
+        });
+
+        server
+            .register(register_req)
+            .await
+            .expect("register should succeed");
+
         let req = with_auth(HeartbeatRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -482,5 +495,59 @@ mod tests {
         assert!(resp.ok);
         assert!(resp.message.contains('1'));
         assert!(resp.message.contains('2'));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_updates_last_seen_at_after_register() {
+        let server = test_server().await;
+
+        let register_req = with_auth(RegisterRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            os: "linux".into(),
+            agent_version: "0.1.0".into(),
+            log_files: vec![],
+        });
+
+        server
+            .register(register_req)
+            .await
+            .expect("register should succeed");
+
+        let token_id = validate_agent_token(&server.state.db.read, TEST_TOKEN)
+            .await
+            .expect("token validation should work")
+            .expect("token should exist");
+
+        let old_value = "2000-01-01T00:00:00Z";
+        sqlx::query("UPDATE agents SET last_seen_at = ? WHERE token_id = ? AND hostname = ?")
+            .bind(old_value)
+            .bind(&token_id)
+            .bind("host1")
+            .execute(&server.state.db.write)
+            .await
+            .expect("force old last_seen_at");
+
+        let heartbeat_req = with_auth(HeartbeatRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            sent_at: Some(valid_ts()),
+        });
+
+        server
+            .heartbeat(heartbeat_req)
+            .await
+            .expect("heartbeat should succeed");
+
+        let updated: String = sqlx::query_scalar(
+            "SELECT last_seen_at FROM agents WHERE token_id = ? AND hostname = ?",
+        )
+        .bind(&token_id)
+        .bind("host1")
+        .fetch_one(&server.state.db.read)
+        .await
+        .expect("fetch updated last_seen_at");
+
+        assert_ne!(updated, old_value);
     }
 }
