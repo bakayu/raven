@@ -9,6 +9,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  SQLX_VERSION: 0.8.6
+  SQLX_FEATURES: "sqlite"
+  DATABASE_URL: "sqlite://./.ci/sqlx-ci.db"
 
 jobs:
   coverage:
@@ -23,11 +26,28 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install sqlx-cli
+        run: |
+          cargo install sqlx-cli \
+            --version "${{ env.SQLX_VERSION }}" \
+            --no-default-features \
+            --features "${{ env.SQLX_FEATURES }}" \
+            --locked
+
+
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+
+      - name: Prepare SQLx database for query macros
+        run: |
+          mkdir -p .ci
+          rm -f .ci/sqlx-ci.db
+          sqlx database create
+          sqlx migrate run --source crates/raven-server/migrations
+
 
       - name: Install tarpaulin
         uses: taiki-e/install-action@v2

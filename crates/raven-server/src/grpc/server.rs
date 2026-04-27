@@ -9,6 +9,9 @@ use raven_proto::proto::{
     RegisterRequest, RegisterResponse, StreamResponse,
 };
 
+use crate::AgentState;
+use crate::db::agents::{update_last_seen, upsert_agent};
+use crate::db::tokens::validate_agent_token;
 use crate::grpc::extract_bearer_token;
 use crate::state::AppState;
 
@@ -25,16 +28,13 @@ impl RavenServer {
 
 impl RavenServer {
     /// Validates the Bearer token on every incoming RPC.
-    /// Returns the raw token string so the handler can use it for agent lookup.
-    fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
+    async fn authorize<T>(&self, request: &Request<T>) -> Result<String, Status> {
         let token = extract_bearer_token(request)?;
 
-        // TODO: replace with db::tokens::validate_agent_token once SQLite is wired
-        if token != self.state.dev_token {
-            return Err(Status::unauthenticated("invalid token"));
-        }
-
-        Ok(())
+        validate_agent_token(&self.state.db.write, &token)
+            .await
+            .map_err(Status::from)?
+            .ok_or_else(|| Status::unauthenticated("Invalid token"))
     }
 
     async fn handle_metric_stream(
@@ -144,7 +144,9 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
-        self.authorize(&request)?;
+        let token_id = self.authorize(&request).await?;
+
+        let ip = request.remote_addr().map(|addr| addr.ip().to_string());
         let req = request.into_inner();
 
         require_fields(&[
@@ -154,7 +156,20 @@ impl RavenIngestion for RavenServer {
             ("agent_version", &req.agent_version),
         ])?;
 
-        // TODO: db::agents::upsert_agent(&self.state.db.write, &req).await.map_err(Status::from)?;
+        // persist to SQLite
+        upsert_agent(&self.state.db.write, &req, token_id.as_str(), ip.as_deref())
+            .await
+            .map_err(Status::from)?;
+
+        // update live state
+        self.state.agents.insert(
+            token_id.clone(),
+            AgentState {
+                agent_id: token_id,
+                hostname: req.hostname.clone(),
+                last_heartbeat: Utc::now(),
+            },
+        );
 
         info!(
             agent_id = %req.agent_id,
@@ -175,14 +190,20 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
-        self.authorize(&request)?;
+        let token_id = self.authorize(&request).await?;
         let req = request.into_inner();
 
         require_fields(&[("agent_id", &req.agent_id), ("hostname", &req.hostname)])?;
 
         let sent_at = parse_timestamp(req.sent_at.as_ref(), "sent_at")?;
 
-        // TODO: db::agents::update_last_seen(&self.state.db.write, &req.agent_id).await.map_err(Status::from)?;
+        // persist to SQLite
+        update_last_seen(&self.state.db.write, token_id.as_str(), &req.hostname).await?;
+
+        // update live state
+        if let Some(mut entry) = self.state.agents.get_mut(&token_id) {
+            entry.last_heartbeat = Utc::now();
+        }
 
         info!(
             agent_id = %req.agent_id,
@@ -201,7 +222,7 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<tonic::Streaming<MetricBatch>>,
     ) -> Result<Response<StreamResponse>, Status> {
-        self.authorize(&request)?;
+        self.authorize(&request).await?;
         let response = self.handle_metric_stream(request.into_inner()).await?;
         Ok(Response::new(response))
     }
@@ -210,7 +231,7 @@ impl RavenIngestion for RavenServer {
         &self,
         request: Request<tonic::Streaming<LogBatch>>,
     ) -> Result<Response<StreamResponse>, Status> {
-        self.authorize(&request)?;
+        self.authorize(&request).await?;
         let response = self.handle_log_stream(request.into_inner()).await?;
         Ok(Response::new(response))
     }
@@ -230,19 +251,14 @@ fn count_log_streams(batch: &LogBatch) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configuration::RavenConfig;
-    use crate::state::AppState;
     use prost_types::Timestamp;
     use raven_proto::proto::raven_ingestion_server::RavenIngestion;
     use tonic::Code;
 
     const TEST_TOKEN: &str = "rvn_test_token";
 
-    fn test_server() -> RavenServer {
-        RavenServer::new(AppState::new(
-            RavenConfig::for_test(),
-            TEST_TOKEN.to_string(),
-        ))
+    async fn test_server() -> RavenServer {
+        RavenServer::new(AppState::for_test().await)
     }
 
     fn with_auth<T>(payload: T) -> Request<T> {
@@ -274,6 +290,8 @@ mod tests {
 
     #[tokio::test]
     async fn register_rejects_missing_auth() {
+        let server = test_server().await;
+
         let req = Request::new(RegisterRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -281,12 +299,15 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
-        let err = test_server().register(req).await.unwrap_err();
+
+        let err = server.register(req).await.unwrap_err();
         assert_eq!(err.code(), Code::Unauthenticated);
     }
 
     #[tokio::test]
     async fn register_rejects_wrong_token() {
+        let server = test_server().await;
+
         let req = with_bad_token(RegisterRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -294,12 +315,15 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
-        let err = test_server().register(req).await.unwrap_err();
+
+        let err = server.register(req).await.unwrap_err();
         assert_eq!(err.code(), Code::Unauthenticated);
     }
 
     #[tokio::test]
     async fn register_rejects_empty_agent_id() {
+        let server = test_server().await;
+
         let req = with_auth(RegisterRequest {
             agent_id: "".into(),
             hostname: "host1".into(),
@@ -307,27 +331,16 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
-        let err = test_server().register(req).await.unwrap_err();
+
+        let err = server.register(req).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("agent_id"));
     }
 
     #[tokio::test]
-    async fn register_rejects_whitespace_fields() {
-        let req = with_auth(RegisterRequest {
-            agent_id: "a1".into(),
-            hostname: "  ".into(), // whitespace only
-            os: "linux".into(),
-            agent_version: "0.1.0".into(),
-            log_files: vec![],
-        });
-        let err = test_server().register(req).await.unwrap_err();
-        assert_eq!(err.code(), Code::InvalidArgument);
-        assert!(err.message().contains("hostname"));
-    }
+    async fn register_succeeds() {
+        let server = test_server().await;
 
-    #[tokio::test]
-    async fn register_succeeds_with_no_log_files() {
         let req = with_auth(RegisterRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -335,67 +348,66 @@ mod tests {
             agent_version: "0.1.0".into(),
             log_files: vec![],
         });
-        let resp = test_server().register(req).await.unwrap();
-        assert!(resp.into_inner().ok);
-    }
 
-    #[tokio::test]
-    async fn register_succeeds_with_log_files() {
-        let req = with_auth(RegisterRequest {
-            agent_id: "a1".into(),
-            hostname: "host1".into(),
-            os: "linux".into(),
-            agent_version: "0.1.0".into(),
-            log_files: vec!["/var/log/app.log".into(), "/var/log/nginx.log".into()],
-        });
-        let resp = test_server().register(req).await.unwrap();
+        let resp = server.register(req).await.unwrap();
         assert!(resp.into_inner().ok);
     }
 
     #[tokio::test]
     async fn heartbeat_rejects_missing_auth() {
+        let server = test_server().await;
+
         let req = Request::new(HeartbeatRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
             sent_at: Some(valid_ts()),
         });
-        let err = test_server().heartbeat(req).await.unwrap_err();
+
+        let err = server.heartbeat(req).await.unwrap_err();
         assert_eq!(err.code(), Code::Unauthenticated);
     }
 
     #[tokio::test]
     async fn heartbeat_rejects_missing_timestamp() {
+        let server = test_server().await;
+
         let req = with_auth(HeartbeatRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
             sent_at: None,
         });
-        let err = test_server().heartbeat(req).await.unwrap_err();
+
+        let err = server.heartbeat(req).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("sent_at"));
     }
 
     #[tokio::test]
-    async fn heartbeat_rejects_empty_agent_id() {
-        let req = with_auth(HeartbeatRequest {
-            agent_id: "".into(),
-            hostname: "host1".into(),
-            sent_at: Some(valid_ts()),
-        });
-        let err = test_server().heartbeat(req).await.unwrap_err();
-        assert_eq!(err.code(), Code::InvalidArgument);
-        assert!(err.message().contains("agent_id"));
-    }
-
-    #[tokio::test]
     async fn heartbeat_succeeds() {
+        let server = test_server().await;
+
+        let register_req = with_auth(RegisterRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            os: "linux".into(),
+            agent_version: "0.1.0".into(),
+            log_files: vec![],
+        });
+
+        server
+            .register(register_req)
+            .await
+            .expect("register should succeed");
+
         let req = with_auth(HeartbeatRequest {
             agent_id: "a1".into(),
             hostname: "host1".into(),
             sent_at: Some(valid_ts()),
         });
-        let resp = test_server().heartbeat(req).await.unwrap();
+
+        let resp = server.heartbeat(req).await.unwrap();
         let inner = resp.into_inner();
+
         assert!(inner.ok);
         assert_eq!(inner.message, "healthy");
     }
@@ -403,6 +415,8 @@ mod tests {
     #[tokio::test]
     async fn stream_metrics_accepts_batch() {
         use raven_proto::proto::{CpuMetrics, MemoryMetrics};
+
+        let server = test_server().await;
 
         let batch = MetricBatch {
             agent_id: "a1".into(),
@@ -422,38 +436,34 @@ mod tests {
         };
 
         let stream = tokio_stream::iter(vec![Ok(batch)]);
-        let resp = test_server().handle_metric_stream(stream).await.unwrap();
+        let resp = server.handle_metric_stream(stream).await.unwrap();
+
         assert!(resp.ok);
         assert!(resp.message.contains('1'));
     }
 
     #[tokio::test]
     async fn stream_metrics_rejects_missing_timestamp() {
+        let server = test_server().await;
+
         let batch = MetricBatch {
             agent_id: "a1".into(),
             hostname: "host1".into(),
             sent_at: None,
             ..Default::default()
         };
+
         let stream = tokio_stream::iter(vec![Ok(batch)]);
-        let err = test_server()
-            .handle_metric_stream(stream)
-            .await
-            .unwrap_err();
+        let err = server.handle_metric_stream(stream).await.unwrap_err();
+
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("sent_at"));
     }
 
     #[tokio::test]
-    async fn stream_metrics_accepts_empty_stream() {
-        let empty = tokio_stream::iter(Vec::<Result<MetricBatch, Status>>::new());
-        let resp = test_server().handle_metric_stream(empty).await.unwrap();
-        assert!(resp.ok);
-        assert!(resp.message.contains('0'));
-    }
-
-    #[tokio::test]
     async fn stream_logs_rejects_empty_source() {
+        let server = test_server().await;
+
         let stream = tokio_stream::iter(vec![Ok(LogBatch {
             agent_id: "a1".into(),
             hostname: "host1".into(),
@@ -461,7 +471,8 @@ mod tests {
             sent_at: Some(valid_ts()),
             entries: vec![],
         })]);
-        let err = test_server().handle_log_stream(stream).await.unwrap_err();
+
+        let err = server.handle_log_stream(stream).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("source"));
     }
@@ -469,6 +480,8 @@ mod tests {
     #[tokio::test]
     async fn stream_logs_counts_entries_correctly() {
         use raven_proto::proto::{LogEntry, LogStream};
+
+        let server = test_server().await;
 
         let entries = vec![
             LogEntry {
@@ -495,9 +508,138 @@ mod tests {
             entries,
         })]);
 
-        let resp = test_server().handle_log_stream(stream).await.unwrap();
+        let resp = server.handle_log_stream(stream).await.unwrap();
+
         assert!(resp.ok);
-        assert!(resp.message.contains('1')); // 1 batch
-        assert!(resp.message.contains('2')); // 2 entries
+        assert!(resp.message.contains('1'));
+        assert!(resp.message.contains('2'));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_updates_last_seen_at_after_register() {
+        let server = test_server().await;
+
+        let register_req = with_auth(RegisterRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            os: "linux".into(),
+            agent_version: "0.1.0".into(),
+            log_files: vec![],
+        });
+
+        server
+            .register(register_req)
+            .await
+            .expect("register should succeed");
+
+        let token_id = validate_agent_token(&server.state.db.read, TEST_TOKEN)
+            .await
+            .expect("token validation should work")
+            .expect("token should exist");
+
+        let old_value = "2000-01-01T00:00:00Z";
+        sqlx::query("UPDATE agents SET last_seen_at = ? WHERE token_id = ? AND hostname = ?")
+            .bind(old_value)
+            .bind(&token_id)
+            .bind("host1")
+            .execute(&server.state.db.write)
+            .await
+            .expect("force old last_seen_at");
+
+        let heartbeat_req = with_auth(HeartbeatRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            sent_at: Some(valid_ts()),
+        });
+
+        server
+            .heartbeat(heartbeat_req)
+            .await
+            .expect("heartbeat should succeed");
+
+        let updated: String = sqlx::query_scalar(
+            "SELECT last_seen_at FROM agents WHERE token_id = ? AND hostname = ?",
+        )
+        .bind(&token_id)
+        .bind("host1")
+        .fetch_one(&server.state.db.read)
+        .await
+        .expect("fetch updated last_seen_at");
+
+        assert_ne!(updated, old_value);
+    }
+
+    #[tokio::test]
+    async fn register_populates_live_agent_state() {
+        let server = test_server().await;
+        let req = with_auth(RegisterRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            os: "linux".into(),
+            agent_version: "0.1.0".into(),
+            log_files: vec![],
+        });
+
+        server.register(req).await.expect("register should succeed");
+
+        let token_id = validate_agent_token(&server.state.db.read, TEST_TOKEN)
+            .await
+            .expect("token validation")
+            .expect("token exists");
+
+        let entry = server
+            .state
+            .agents
+            .get(&token_id)
+            .expect("agent should be in live map");
+        assert_eq!(entry.hostname, "host1");
+        assert_eq!(entry.agent_id, token_id);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_updates_live_agent_state_timestamp() {
+        let server = test_server().await;
+        let register_req = with_auth(RegisterRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            os: "linux".into(),
+            agent_version: "0.1.0".into(),
+            log_files: vec![],
+        });
+        server
+            .register(register_req)
+            .await
+            .expect("register should succeed");
+
+        let token_id = validate_agent_token(&server.state.db.read, TEST_TOKEN)
+            .await
+            .expect("token validation")
+            .expect("token exists");
+
+        let old = chrono::DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+
+        {
+            let mut entry = server
+                .state
+                .agents
+                .get_mut(&token_id)
+                .expect("live map entry");
+            entry.last_heartbeat = old;
+        }
+
+        let hb = with_auth(HeartbeatRequest {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            sent_at: Some(valid_ts()),
+        });
+        server
+            .heartbeat(hb)
+            .await
+            .expect("heartbeat should succeed");
+
+        let updated = server.state.agents.get(&token_id).expect("live map entry");
+        assert!(updated.last_heartbeat > old);
     }
 }

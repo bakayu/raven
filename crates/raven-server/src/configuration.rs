@@ -18,6 +18,10 @@ const DEFAULT_JWT_AUDIENCE: &str = "raven-dashboard";
 const DEFAULT_ACCESS_TOKEN_TTL_MINUTES: u64 = 15;
 const DEFAULT_REFRESH_TOKEN_TTL_DAYS: u64 = 30;
 
+const DEFAULT_SQLITE_PATH: &str = "/var/lib/raven/raven.db";
+const DEFAULT_VICTORIA_METRICS_URL: &str = "http://localhost:8428";
+const DEFAULT_CLICKHOUSE_URL: &str = "http://localhost:8123";
+
 const DEFAULT_GOOGLE_ISSUER: &str = "https://accounts.google.com";
 const DEFAULT_GOOGLE_DISCOVERY_URL: &str =
     "https://accounts.google.com/.well-known/openid-configuration";
@@ -30,6 +34,7 @@ pub struct RavenConfig {
     pub server: ServerConfig,
     pub tls: TlsConfig,
     pub auth: AuthConfig,
+    pub database: DatabaseConfig,
     pub oidc: OidcConfig,
 }
 
@@ -57,6 +62,14 @@ pub struct AuthConfig {
     pub access_token_ttl_minutes: u64,
     pub refresh_token_ttl_days: u64,
     pub jwt_signing_key: SecretString,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DatabaseConfig {
+    pub sqlite_path: String,
+    pub victoria_metrics_url: String,
+    pub clickhouse_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -109,6 +122,16 @@ impl Default for AuthConfig {
     }
 }
 
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            sqlite_path: DEFAULT_SQLITE_PATH.to_string(),
+            victoria_metrics_url: DEFAULT_VICTORIA_METRICS_URL.to_string(),
+            clickhouse_url: DEFAULT_CLICKHOUSE_URL.to_string(),
+        }
+    }
+}
+
 impl Default for GoogleOidcConfig {
     fn default() -> Self {
         Self {
@@ -145,6 +168,12 @@ impl RavenConfig {
                 "auth.refresh_token_ttl_days",
                 DEFAULT_REFRESH_TOKEN_TTL_DAYS,
             )?
+            .set_default("database.sqlite_path", DEFAULT_SQLITE_PATH)?
+            .set_default(
+                "database.victoria_metrics_url",
+                DEFAULT_VICTORIA_METRICS_URL,
+            )?
+            .set_default("database.clickhouse_url", DEFAULT_CLICKHOUSE_URL)?
             .set_default("oidc.google.enabled", false)?
             .set_default("oidc.google.issuer", DEFAULT_GOOGLE_ISSUER)?
             .set_default("oidc.google.discovery_url", DEFAULT_GOOGLE_DISCOVERY_URL)?
@@ -208,6 +237,18 @@ impl RavenConfig {
 
         if self.auth.jwt_signing_key.expose_secret().trim().is_empty() {
             bail!("auth.jwt_signing_key cannot be empty");
+        }
+
+        if self.database.sqlite_path.trim().is_empty() {
+            bail!("database.sqlite_path cannot be empty");
+        }
+
+        if self.database.victoria_metrics_url.trim().is_empty() {
+            bail!("database.victoria_metrics_url cannot be empty");
+        }
+
+        if self.database.clickhouse_url.trim().is_empty() {
+            bail!("database.clickhouse_url cannot be empty");
         }
 
         if self.oidc.google.enabled {
@@ -279,6 +320,11 @@ impl RavenConfig {
                 refresh_token_ttl_days: 30,
                 jwt_signing_key: SecretString::new("test_signing_key".into()),
             },
+            database: DatabaseConfig {
+                sqlite_path: "/var/lib/raven/raven.db".into(),
+                victoria_metrics_url: "http://localhost:8428".into(),
+                clickhouse_url: "http://localhost:8123".into(),
+            },
             oidc: OidcConfig {
                 google: GoogleOidcConfig {
                     enabled: false,
@@ -333,6 +379,11 @@ access_token_ttl_minutes = 20
 refresh_token_ttl_days = 45
 jwt_signing_key = "dev-secret-key"
 
+[database]
+sqlite_path = "./raven-dev.db"
+victoria_metrics_url = "http://localhost:8428"
+clickhouse_url = "http://localhost:8123"
+
 [oidc.google]
 enabled = true
 issuer = "https://accounts.google.com"
@@ -358,6 +409,10 @@ scopes = ["openid", "email", "profile"]
         assert_eq!(cfg.auth.access_token_ttl_minutes, 20);
         assert_eq!(cfg.auth.refresh_token_ttl_days, 45);
         assert_eq!(cfg.auth.jwt_signing_key.expose_secret(), "dev-secret-key");
+
+        assert_eq!(cfg.database.sqlite_path, "./raven-dev.db");
+        assert_eq!(cfg.database.victoria_metrics_url, "http://localhost:8428");
+        assert_eq!(cfg.database.clickhouse_url, "http://localhost:8123");
 
         assert!(cfg.oidc.google.enabled);
         assert_eq!(cfg.oidc.google.issuer, "https://accounts.google.com");

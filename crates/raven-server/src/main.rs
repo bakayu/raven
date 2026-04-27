@@ -1,18 +1,49 @@
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 
+use clap::Parser;
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tracing::info;
 
 use raven_proto::proto::raven_ingestion_server::RavenIngestionServer;
-use raven_server::{AppState, RavenConfig, RavenServer, init_subscriber};
+use raven_server::{
+    AgentState, AppState, Db, RavenConfig, RavenServer, agents::load_all_agents, init_subscriber,
+    tokens::seed_dev_token,
+};
+
+#[derive(Debug, Parser)]
+struct Cli {
+    #[arg(long, default_value = "/etc/raven/server.toml")]
+    config: PathBuf,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
     init_subscriber("raven-server", "info")?;
 
-    let config = RavenConfig::load(Path::new("/etc/raven/server.toml"))?;
-    let state = AppState::new(config, "rvn_dev_token".to_string());
+    let config = RavenConfig::load(&cli.config)?;
+
+    let db = Db::connect(&config.database.sqlite_path).await?;
+    sqlx::migrate!("./migrations").run(&db.write).await?;
+    seed_dev_token(&db.write, "rvn_dev_token").await?;
+
+    let state = AppState::new(config, db);
+
+    let known_agents = load_all_agents(&state.db.read).await?;
+    for (token_id, hostname, last_seen) in known_agents {
+        state.agents.insert(
+            token_id.clone(),
+            AgentState {
+                agent_id: token_id,
+                hostname,
+                last_heartbeat: last_seen,
+            },
+        );
+    }
+
+    info!(agents = state.agents.len(), "loaded agents from database");
 
     let addr: std::net::SocketAddr = state.config.server.grpc_listen_addr.parse()?;
     let service = RavenIngestionServer::new(RavenServer::new(state.clone()));

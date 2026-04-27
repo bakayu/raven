@@ -1,6 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 agent_config := "config/agent.toml"
+server_config := "config/server.toml"
 
 # Meta
 default:
@@ -49,7 +50,7 @@ ci: fmt-check clippy test
 
 # Rust (binaries)
 run-server:
-    cargo run -p raven-server
+    cargo run -p raven-server -- --config {{ server_config }}
 
 run-agent:
     cargo run -p raven-agent -- --config {{ agent_config }}
@@ -58,12 +59,12 @@ run-agent-bunyan:
     cargo run -p raven-agent -- --config {{ agent_config }} | bunyan
 
 watch-server:
-    cargo watch -w crates/raven-server -w crates/raven-proto -w proto -x "run -p raven-server"
+    cargo watch -w crates/raven-server -w crates/raven-proto -w proto -x "run -p raven-server -- --config {{ server_config }}"
 
 watch-server-fast:
     env \
       RUST_LOG=raven_server=debug \
-      cargo watch -w crates/raven-server -w crates/raven-proto -w proto -x "run -p raven-server"
+      cargo watch -w crates/raven-server -w crates/raven-proto -w proto -x "run -p raven-server -- --config {{ server_config }}"
 
 watch-agent:
     cargo watch -w crates/raven-agent -w crates/raven-proto -w proto -x "run -p raven-agent -- --config {{ agent_config }}"
@@ -84,7 +85,7 @@ dev-watch-agent-fast:
       cargo watch -w crates/raven-agent -w crates/raven-proto -w proto -x "run -p raven-agent -- --config {{ agent_config }}"
 
 dev-watch-server:
-    RUST_LOG=debug cargo watch -w crates/raven-server -w crates/raven-proto -w proto -x "run -p raven-server"
+    RUST_LOG=debug cargo watch -w crates/raven-server -w crates/raven-proto -w proto -x "run -p raven-server -- --config {{ server_config }}"
 
 dev-up:
     docker compose -f docker-compose.dev.yml up -d
@@ -153,3 +154,6 @@ compose-restart service="raven-server":
 
 compose-prune:
     docker compose down -v --remove-orphans
+
+db-clean:
+    rm raven-dev.db raven-dev.db-shm raven-dev.db-wal 2>/dev/null; true
