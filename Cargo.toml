@@ -79,8 +79,9 @@ uuid = { version = "1", features = ["v4"] }
 sha2 = "0.11"
 hex = "0.4"
 dashmap = "6"
-rand = "0.10"
+rand = { version = "0.10", features = ["std"] }
 rand_core = "0.10"
+rand_distr = "0.6"
 thiserror = "2"
 anyhow = "1"
 config = "0.15"

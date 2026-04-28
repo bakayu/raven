@@ -20,6 +20,9 @@ pub enum AppError {
     #[error("invalid or missing token")]
     Unauthorized,
 
+    #[error("forbidden")]
+    Forbidden,
+
     #[error("token has been revoked")]
     TokenRevoked,
 
@@ -123,7 +126,7 @@ impl IntoResponse for AppError {
             },
 
             // 403
-            AppError::AccountLocked | AppError::SetupAlreadyDone => {
+            AppError::AccountLocked | AppError::SetupAlreadyDone | AppError::Forbidden => {
                 (StatusCode::FORBIDDEN, self.to_string())
             }
 
@@ -186,7 +189,7 @@ impl From<AppError> for Status {
             | AppError::Jwt(_) => Status::unauthenticated(err.to_string()),
 
             // PERMISSION_DENIED
-            AppError::AccountLocked | AppError::SetupAlreadyDone => {
+            AppError::AccountLocked | AppError::SetupAlreadyDone | AppError::Forbidden => {
                 Status::permission_denied(err.to_string())
             }
 

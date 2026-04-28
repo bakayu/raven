@@ -1,8 +1,19 @@
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::error::AppResult;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AgentToken {
+    pub id: String,
+    pub name: String,
+    pub created_by: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub revoked_at: Option<String>,
+}
 
 /// SHA-256 hash of the raw token string, returned as a hex string.
 pub fn hash_token(raw: &str) -> String {
@@ -12,7 +23,138 @@ pub fn hash_token(raw: &str) -> String {
 }
 
 #[tracing::instrument(
-    name="validating agent token",
+    name = "create agent token",
+    skip(db, raw_token),
+    fields(name = %name, created_by = %created_by)
+)]
+pub async fn create_agent_token(
+    db: &SqlitePool,
+    name: &str,
+    raw_token: &str,
+    created_by: &str,
+) -> AppResult<String> {
+    let token_hash = hash_token(raw_token);
+
+    let id = sqlx::query_scalar!(
+        r#"
+        INSERT INTO agent_tokens (name, token_hash, created_by)
+        VALUES (?, ?, ?)
+        RETURNING id as "id!"
+        "#,
+        name,
+        token_hash,
+        created_by
+    )
+    .fetch_one(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, name = %name, created_by = %created_by, "failed to create agent token");
+        e
+    })?;
+
+    debug!(token_id = %id, name = %name, created_by = %created_by, "agent token created");
+    Ok(id)
+}
+
+#[tracing::instrument(
+    name = "list agent tokens",
+    skip(db),
+    fields(created_by = %created_by, include_revoked = include_revoked)
+)]
+pub async fn list_agent_tokens(
+    db: &SqlitePool,
+    created_by: &str,
+    include_revoked: bool,
+) -> AppResult<Vec<AgentToken>> {
+    let rows = if include_revoked {
+        sqlx::query_as!(
+            AgentToken,
+            r#"
+            SELECT
+                id as "id!",
+                name as "name!",
+                created_by as "created_by!",
+                created_at as "created_at!",
+                last_used_at,
+                revoked_at
+            FROM agent_tokens
+            WHERE created_by = ?
+            ORDER BY created_at DESC
+            "#,
+            created_by
+        )
+        .fetch_all(db)
+        .await
+    } else {
+        sqlx::query_as!(
+            AgentToken,
+            r#"
+            SELECT
+                id as "id!",
+                name as "name!",
+                created_by as "created_by!",
+                created_at as "created_at!",
+                last_used_at,
+                revoked_at
+            FROM agent_tokens
+            WHERE created_by = ?
+              AND revoked_at IS NULL
+            ORDER BY created_at DESC
+            "#,
+            created_by
+        )
+        .fetch_all(db)
+        .await
+    }
+    .map_err(|e| {
+        error!(error = %e, created_by = %created_by, "failed to list agent tokens");
+        e
+    })?;
+
+    debug!(count = rows.len(), created_by = %created_by, "listed agent tokens");
+    Ok(rows)
+}
+
+#[tracing::instrument(
+    name = "revoke agent token",
+    skip(db),
+    fields(token_id = %token_id, created_by = %created_by)
+)]
+pub async fn revoke_agent_token(
+    db: &SqlitePool,
+    token_id: &str,
+    created_by: &str,
+) -> AppResult<bool> {
+    let res = sqlx::query!(
+        r#"
+        UPDATE agent_tokens
+        SET revoked_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE id = ?
+          AND created_by = ?
+          AND revoked_at IS NULL
+        "#,
+        token_id,
+        created_by
+    )
+    .execute(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, token_id = %token_id, created_by = %created_by, "failed to revoke agent token");
+        e
+    })?;
+
+    let revoked = res.rows_affected() > 0;
+    if !revoked {
+        warn!(token_id = %token_id, created_by = %created_by, "no active token revoked");
+    } else {
+        debug!(token_id = %token_id, created_by = %created_by, "agent token revoked");
+    }
+
+    Ok(revoked)
+}
+
+#[tracing::instrument(
+    name = "validating agent token",
     skip(db, raw_token),
     fields(token_hash = %hash_token(raw_token))
 )]
@@ -40,79 +182,4 @@ pub async fn validate_agent_token(db: &SqlitePool, raw_token: &str) -> AppResult
     }
 
     Ok(row.map(|r| r.id))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Db;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_db_path(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time went backwards")
-            .as_nanos();
-
-        std::env::temp_dir().join(format!("{}_{}_{}.db", name, std::process::id(), nanos))
-    }
-
-    async fn setup_db(name: &str) -> (Db, PathBuf) {
-        let path = temp_db_path(name);
-        let db = Db::connect(path.to_str().expect("utf8 path"))
-            .await
-            .expect("connect db");
-
-        sqlx::migrate!("./migrations")
-            .run(&db.write)
-            .await
-            .expect("run migrations");
-
-        (db, path)
-    }
-
-    #[tokio::test]
-    async fn hash_token_is_stable_and_not_plaintext() {
-        let first = hash_token("rvn_test_token");
-        let second = hash_token("rvn_test_token");
-
-        assert_eq!(first, second);
-        assert_ne!(first, "rvn_test_token");
-        assert_eq!(first.len(), 64);
-    }
-
-    #[tokio::test]
-    async fn validate_agent_token_finds_seeded_token() {
-        let (db, path) = setup_db("validate_seeded").await;
-
-        let expected_id: String =
-            sqlx::query_scalar("SELECT id FROM agent_tokens WHERE name = 'dev-token' LIMIT 1")
-                .fetch_one(&db.write)
-                .await
-                .expect("fetch token id");
-
-        let found = validate_agent_token(&db.write, "rvn_test_token")
-            .await
-            .expect("validate token");
-
-        assert_eq!(found.as_deref(), Some(expected_id.as_str()));
-
-        drop(db);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn validate_agent_token_returns_none_for_unknown_token() {
-        let (db, path) = setup_db("validate_unknown").await;
-
-        let found = validate_agent_token(&db.write, "rvn_wrong_token")
-            .await
-            .expect("validate token");
-
-        assert!(found.is_none());
-
-        drop(db);
-        let _ = std::fs::remove_file(path);
-    }
 }

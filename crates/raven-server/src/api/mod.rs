@@ -2,6 +2,7 @@ use axum::{Router, routing::get};
 
 use crate::state::AppState;
 
+pub mod agents;
 pub mod auth;
 
 pub fn router(state: AppState) -> Router {
@@ -9,6 +10,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .nest("/api/auth", auth::router())
+        .nest("/api/agents", agents::router())
         .with_state(state)
 }
 

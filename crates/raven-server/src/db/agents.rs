@@ -1,10 +1,24 @@
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use sqlx::SqlitePool;
 use tracing::{debug, error, warn};
 
 use raven_proto::proto::RegisterRequest;
 
 use crate::{AppError, AppResult};
+
+#[derive(Debug, Serialize)]
+pub struct AgentRow {
+    pub id: String,
+    pub token_id: String,
+    pub hostname: String,
+    pub ip: Option<String>,
+    pub os: String,
+    pub agent_version: String,
+    pub log_files: String,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+}
 
 /// Insert new agent on register, update if token_id and hostname exist
 /// in the agents table
@@ -59,6 +73,35 @@ pub async fn upsert_agent(
     );
 
     Ok(())
+}
+
+#[tracing::instrument(name = "listing all agents", skip(db))]
+pub async fn list_agents(db: &SqlitePool) -> AppResult<Vec<AgentRow>> {
+    let rows = sqlx::query_as!(
+        AgentRow,
+        r#"
+        SELECT
+            id as "id!",
+            token_id,
+            hostname,
+            ip,
+            os as "os!",
+            agent_version as "agent_version!",
+            log_files,
+            first_seen_at,
+            last_seen_at
+        FROM agents
+        ORDER BY first_seen_at DESC
+        "#
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, "failed to list agents");
+        e
+    })?;
+
+    Ok(rows)
 }
 
 /// update "last_seen_at" for an agent
