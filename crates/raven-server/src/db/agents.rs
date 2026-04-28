@@ -138,7 +138,7 @@ pub async fn load_all_agents(db: &SqlitePool) -> AppResult<Vec<(String, String, 
 mod tests {
     use super::*;
     use crate::Db;
-    use crate::db::tokens::{seed_dev_token, validate_agent_token};
+    use crate::db::tokens::validate_agent_token;
     use raven_proto::proto::RegisterRequest;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -162,11 +162,6 @@ mod tests {
             .run(&db.write)
             .await
             .expect("run migrations");
-
-        seed_dev_token(&db.write, "rvn_test_token")
-            .await
-            .expect("seed dev token");
-
         (db, path)
     }
 

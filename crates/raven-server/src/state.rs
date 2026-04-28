@@ -8,9 +8,8 @@ use tracing::info;
 use raven_proto::proto::LogBatch;
 
 use crate::{
-    ClickHouseClient, Db, VictoriaMetricsClient,
-    configuration::RavenConfig,
-    db::{agents::load_all_agents, tokens::seed_dev_token},
+    ClickHouseClient, Db, VictoriaMetricsClient, configuration::RavenConfig,
+    db::agents::load_all_agents,
 };
 
 #[derive(Debug, Clone)]
@@ -34,7 +33,6 @@ impl AppState {
     pub async fn new(config: RavenConfig) -> anyhow::Result<Self> {
         let db = Db::connect(&config.database.sqlite_path).await?;
         sqlx::migrate!("./migrations").run(&db.write).await?;
-        seed_dev_token(&db.write, "rvn_dev_token").await?;
 
         let vm = VictoriaMetricsClient::new(&config.database.victoria_metrics_url);
         let ch = ClickHouseClient::new(&config.database.clickhouse_url);
@@ -86,8 +84,6 @@ impl AppState {
 
         let db = Db::connect(&config.database.sqlite_path).await.unwrap();
         sqlx::migrate!("./migrations").run(&db.write).await.unwrap();
-
-        seed_dev_token(&db.write, "rvn_test_token").await.unwrap();
 
         let vm_client = VictoriaMetricsClient::new(&config.database.victoria_metrics_url);
         let ch_client = ClickHouseClient::new(&config.database.clickhouse_url);
