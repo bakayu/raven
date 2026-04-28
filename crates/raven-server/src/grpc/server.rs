@@ -67,6 +67,12 @@ impl RavenServer {
                 "metrics batch received"
             );
 
+            self.state
+                .vm_client
+                .write(&batch)
+                .await
+                .map_err(Status::from)?;
+
             batches += 1;
         }
 
@@ -105,6 +111,14 @@ impl RavenServer {
                 sent_at = %sent_at,
                 "log batch received"
             );
+
+            let _ = self.state.log_tx.send(batch.clone());
+
+            self.state
+                .ch_client
+                .write_logs(&batch)
+                .await
+                .map_err(Status::from)?;
 
             batches += 1;
             total_entries += batch.entries.len();
@@ -641,5 +655,38 @@ mod tests {
 
         let updated = server.state.agents.get(&token_id).expect("live map entry");
         assert!(updated.last_heartbeat > old);
+    }
+
+    #[tokio::test]
+    async fn stream_logs_broadcasts_batches() {
+        use raven_proto::proto::{LogBatch, LogEntry, LogStream};
+        use tokio::time::{Duration, timeout};
+
+        let server = test_server().await;
+        let mut rx = server.state.log_tx.subscribe();
+
+        let batch = LogBatch {
+            agent_id: "a1".into(),
+            hostname: "host1".into(),
+            source: "app".into(),
+            sent_at: Some(valid_ts()),
+            entries: vec![LogEntry {
+                source: "app".into(),
+                path: "/var/log/app.log".into(),
+                line: "hello".into(),
+                stream: LogStream::Stdout as i32,
+                timestamp: Some(valid_ts()),
+            }],
+        };
+
+        let stream = tokio_stream::iter(vec![Ok(batch.clone())]);
+        let _ = server.handle_log_stream(stream).await.unwrap();
+
+        let received = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("recv timeout")
+            .expect("recv ok");
+
+        assert_eq!(received.hostname, batch.hostname);
     }
 }

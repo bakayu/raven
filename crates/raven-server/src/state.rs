@@ -2,14 +2,25 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use tokio::sync::broadcast;
+use tracing::info;
 
-use crate::{Db, configuration::RavenConfig};
+use raven_proto::proto::LogBatch;
+
+use crate::{
+    ClickHouseClient, Db, VictoriaMetricsClient,
+    configuration::RavenConfig,
+    db::{agents::load_all_agents, tokens::seed_dev_token},
+};
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub config: Arc<RavenConfig>,
     pub db: Arc<Db>,
     pub agents: Arc<DashMap<String, AgentState>>,
+    pub vm_client: Arc<VictoriaMetricsClient>,
+    pub ch_client: Arc<ClickHouseClient>,
+    pub log_tx: broadcast::Sender<LogBatch>,
 }
 
 #[derive(Debug, Clone)]
@@ -20,12 +31,41 @@ pub struct AgentState {
 }
 
 impl AppState {
-    pub fn new(config: RavenConfig, db: Db) -> Self {
-        Self {
+    pub async fn new(config: RavenConfig) -> anyhow::Result<Self> {
+        let db = Db::connect(&config.database.sqlite_path).await?;
+        sqlx::migrate!("./migrations").run(&db.write).await?;
+        seed_dev_token(&db.write, "rvn_dev_token").await?;
+
+        let vm = VictoriaMetricsClient::new(&config.database.victoria_metrics_url);
+        let ch = ClickHouseClient::new(&config.database.clickhouse_url);
+
+        let state = Self {
             config: Arc::new(config),
             db: Arc::new(db),
             agents: Arc::new(DashMap::new()),
+            vm_client: Arc::new(vm),
+            ch_client: Arc::new(ch),
+            log_tx: broadcast::channel(1024).0,
+        };
+
+        state.ch_client.ensure_schema().await?;
+        info!("clickhouse schema ready");
+
+        let known_agents = load_all_agents(&state.db.read).await?;
+        for (token_id, hostname, last_seen) in known_agents {
+            state.agents.insert(
+                token_id.clone(),
+                AgentState {
+                    agent_id: token_id,
+                    hostname,
+                    last_heartbeat: last_seen,
+                },
+            );
         }
+
+        info!(agents = state.agents.len(), "loaded agents from database");
+
+        Ok(state)
     }
 }
 
@@ -41,22 +81,29 @@ impl AppState {
                 .as_nanos()
         ));
 
-        let db = Db::connect(db_path.to_str().expect("utf8 path"))
-            .await
-            .unwrap();
+        let mut config = RavenConfig::for_test();
+        config.database.sqlite_path = db_path.to_str().expect("utf8 path").to_string();
+
+        let db = Db::connect(&config.database.sqlite_path).await.unwrap();
         sqlx::migrate!("./migrations").run(&db.write).await.unwrap();
 
-        crate::db::tokens::seed_dev_token(&db.write, "rvn_test_token")
-            .await
-            .unwrap();
+        seed_dev_token(&db.write, "rvn_test_token").await.unwrap();
+
+        let vm_client = VictoriaMetricsClient::new(&config.database.victoria_metrics_url);
+        let ch_client = ClickHouseClient::new(&config.database.clickhouse_url);
 
         let state = AppState {
-            config: Arc::new(RavenConfig::for_test()),
+            config: Arc::new(config),
             db: Arc::new(db),
             agents: Arc::new(DashMap::new()),
+            vm_client: Arc::new(vm_client),
+            ch_client: Arc::new(ch_client),
+            log_tx: broadcast::channel(1024).0,
         };
 
-        let known_agents = crate::db::agents::load_all_agents(&state.db.read)
+        state.ch_client.ensure_schema().await.unwrap();
+
+        let known_agents = load_all_agents(&state.db.read)
             .await
             .expect("load known agents");
         for (token_id, hostname, last_seen) in known_agents {

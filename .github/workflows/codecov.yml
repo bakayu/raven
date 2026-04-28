@@ -17,6 +17,19 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.2-alpine
+        ports:
+          - 8123:8123
+        env:
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: ""
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      victoriametrics:
+        image: victoriametrics/victoria-metrics:v1.104.0
+        ports:
+          - 8428:8428
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
@@ -34,7 +47,6 @@ jobs:
             --features "${{ env.SQLX_FEATURES }}" \
             --locked
 
-
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
@@ -48,14 +60,25 @@ jobs:
           sqlx database create
           sqlx migrate run --source crates/raven-server/migrations
 
-
       - name: Install tarpaulin
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-tarpaulin
 
+      - name: Wait for ClickHouse + VictoriaMetrics
+        run: |
+          for i in {1..30}; do
+            curl -fsS http://localhost:8123/ping && break || sleep 1
+          done
+          for i in {1..30}; do
+            curl -fsS http://localhost:8428/-/ready && break || sleep 1
+          done
+
       - name: Generate code coverage
-        run: cargo tarpaulin --verbose --workspace --out xml
+        env:
+          RAVEN_DATABASE__CLICKHOUSE_URL: "http://localhost:8123"
+          RAVEN_DATABASE__VICTORIA_METRICS_URL: "http://localhost:8428"
+        run: cargo tarpaulin --verbose --workspace --out xml -- --ignored
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
