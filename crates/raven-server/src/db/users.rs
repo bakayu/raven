@@ -58,6 +58,23 @@ pub async fn find_by_username(db: &SqlitePool, username: &str) -> AppResult<Opti
     Ok(row)
 }
 
+pub async fn find_by_id(db: &SqlitePool, id: &str) -> AppResult<Option<User>> {
+    let row = sqlx::query_as!(
+        User,
+        r#"
+        SELECT id as "id!", username, email, password_hash, role,
+               failed_login_attempts, auth_locked_until
+        FROM users
+        WHERE id = ?
+        "#,
+        id
+    )
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row)
+}
+
 pub async fn update_failed_attempts(
     db: &SqlitePool,
     user_id: &str,

@@ -22,7 +22,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_active_agents))
         .route("/tokens", post(generate_token).get(list_tokens))
-        .route("/tokens/:id", delete(revoke_token))
+        .route("/tokens/{id}", delete(revoke_token))
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,7 +108,7 @@ async fn list_active_agents(
     let db_rows = agents::list_agents(&state.db.read).await?;
 
     let now = chrono::Utc::now();
-    let agent_miss_threshold = chrono::Duration::seconds(60); // e.g. 1 minute timeout
+    let agent_miss_threshold = chrono::Duration::seconds(60);
 
     let agents = db_rows
         .into_iter()

@@ -198,7 +198,7 @@ async fn refresh(
         return Err(AppError::SessionExpired);
     }
 
-    let user = users::find_by_username(&state.db.read, &session.user_id)
+    let user = users::find_by_id(&state.db.read, &session.user_id)
         .await?
         .ok_or(AppError::Unauthorized)?;
 
