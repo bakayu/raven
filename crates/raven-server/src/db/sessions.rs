@@ -15,18 +15,27 @@ pub async fn insert_refresh_token(
     user_id: &str,
     token_hash: &str,
     expires_at: &str,
+    rotated_from_token_id: Option<&str>,
     ip: Option<&str>,
     user_agent: Option<&str>,
 ) -> AppResult<String> {
     let id = sqlx::query_scalar!(
         r#"
-        INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_by_ip, created_by_user_agent)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO refresh_tokens (
+            user_id,
+            token_hash,
+            expires_at,
+            rotated_from_token_id,
+            created_by_ip,
+            created_by_user_agent
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
         RETURNING id as "id!"
         "#,
         user_id,
         token_hash,
         expires_at,
+        rotated_from_token_id,
         ip,
         user_agent,
     )
@@ -125,6 +134,7 @@ mod tests {
             &user_id,
             "token_hash_1",
             "2099-01-01T00:00:00Z",
+            None,
             Some("127.0.0.1"),
             Some("test-agent"),
         )
@@ -157,6 +167,7 @@ mod tests {
             &user_id,
             "token_hash_2",
             "2099-01-01T00:00:00Z",
+            None,
             None,
             None,
         )

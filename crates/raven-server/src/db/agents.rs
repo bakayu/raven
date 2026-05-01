@@ -181,7 +181,7 @@ pub async fn load_all_agents(db: &SqlitePool) -> AppResult<Vec<(String, String, 
 mod tests {
     use super::*;
     use crate::Db;
-    use crate::db::tokens::validate_agent_token;
+    use crate::db::{tokens::create_agent_token, tokens::validate_agent_token, users};
     use raven_proto::proto::RegisterRequest;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -208,6 +208,16 @@ mod tests {
         (db, path)
     }
 
+    async fn seed_agent_token(db: &Db) -> String {
+        let owner_id = users::create(&db.write, "agent-owner", "hash123", "admin")
+            .await
+            .expect("create owner user");
+
+        create_agent_token(&db.write, "test-agent", "rvn_test_token", &owner_id)
+            .await
+            .expect("create agent token")
+    }
+
     fn sample_register(hostname: &str) -> RegisterRequest {
         RegisterRequest {
             agent_id: "agent-1".into(),
@@ -222,10 +232,14 @@ mod tests {
     async fn load_all_agents_returns_inserted_agent() {
         let (db, path) = setup_db("load_all_agents").await;
 
-        let token_id = validate_agent_token(&db.read, "rvn_test_token")
+        let token_id = seed_agent_token(&db).await;
+
+        let validated = validate_agent_token(&db.read, "rvn_test_token")
             .await
             .expect("validate token")
             .expect("token exists");
+
+        assert_eq!(validated, token_id);
 
         let req = sample_register("host-a");
         upsert_agent(&db.write, &req, token_id.as_str(), Some("10.0.0.1"))
@@ -265,10 +279,14 @@ mod tests {
     async fn update_last_seen_changes_timestamp_for_existing_agent() {
         let (db, path) = setup_db("update_last_seen_ok").await;
 
-        let token_id = validate_agent_token(&db.read, "rvn_test_token")
+        let token_id = seed_agent_token(&db).await;
+
+        let validated = validate_agent_token(&db.read, "rvn_test_token")
             .await
             .expect("validate token")
             .expect("token exists");
+
+        assert_eq!(validated, token_id);
 
         let req = sample_register("host-b");
         upsert_agent(&db.write, &req, token_id.as_str(), Some("10.0.0.2"))

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use reqwest::Client;
+use reqwest::{Client, Url};
+use serde_json::Value;
 use tracing::{debug, warn};
 
 use raven_proto::proto::MetricBatch;
@@ -76,6 +77,31 @@ impl VictoriaMetricsClient {
         }
 
         Ok(())
+    }
+
+    pub async fn query_range(&self, query: &str) -> AppResult<Value> {
+        let mut url = Url::parse(&format!("{}/api/v1/query_range", self.base_url))
+            .map_err(|e| AppError::VictoriaMetrics(e.to_string()))?;
+        url.query_pairs_mut().append_pair("query", query);
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| AppError::VictoriaMetrics(e.to_string()))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| AppError::VictoriaMetrics(e.to_string()))?;
+        if !status.is_success() {
+            return Err(AppError::VictoriaMetrics(format!(
+                "unexpected status {status}: {body}"
+            )));
+        }
+
+        serde_json::from_str(&body).map_err(AppError::from)
     }
 }
 

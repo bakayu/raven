@@ -7,6 +7,7 @@ use tracing::info;
 
 use raven_proto::proto::LogBatch;
 
+use crate::rate_limit::RateLimitEntry;
 use crate::{
     ClickHouseClient, Db, VictoriaMetricsClient, configuration::RavenConfig,
     db::agents::load_all_agents,
@@ -17,6 +18,7 @@ pub struct AppState {
     pub config: Arc<RavenConfig>,
     pub db: Arc<Db>,
     pub agents: Arc<DashMap<String, AgentState>>,
+    pub rate_limits: Arc<DashMap<String, RateLimitEntry>>,
     pub vm_client: Arc<VictoriaMetricsClient>,
     pub ch_client: Arc<ClickHouseClient>,
     pub log_tx: broadcast::Sender<LogBatch>,
@@ -41,6 +43,7 @@ impl AppState {
             config: Arc::new(config),
             db: Arc::new(db),
             agents: Arc::new(DashMap::new()),
+            rate_limits: Arc::new(DashMap::new()),
             vm_client: Arc::new(vm),
             ch_client: Arc::new(ch),
             log_tx: broadcast::channel(1024).0,
@@ -92,6 +95,7 @@ impl AppState {
             config: Arc::new(config),
             db: Arc::new(db),
             agents: Arc::new(DashMap::new()),
+            rate_limits: Arc::new(DashMap::new()),
             vm_client: Arc::new(vm_client),
             ch_client: Arc::new(ch_client),
             log_tx: broadcast::channel(1024).0,

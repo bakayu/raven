@@ -1,6 +1,6 @@
 use axum::http::HeaderValue;
 use axum::http::header::{COOKIE, HeaderMap, SET_COOKIE};
-use axum::{Json, Router, extract::State, routing::post};
+use axum::{Extension, Json, Router, extract::State, routing::post};
 use chrono::{Duration, SecondsFormat, Utc};
 use hyper::StatusCode;
 use rand::prelude::*;
@@ -9,11 +9,14 @@ use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::api::middleware::RequestContext;
 use crate::auth::{jwt, password};
-use crate::db::{sessions, users};
+use crate::db::{audit, sessions, users};
 use crate::error::{AppError, AppResult};
+use crate::rate_limit::check_rate_limit;
 use crate::state::AppState;
 use crate::tokens;
+use serde_json::json;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -62,8 +65,19 @@ fn extract_refresh_token(headers: &HeaderMap) -> Option<String> {
 
 async fn setup(
     State(state): State<AppState>,
+    Extension(ctx): Extension<RequestContext>,
     Json(body): Json<SetupRequest>,
 ) -> AppResult<(StatusCode, Json<SetupResponse>)> {
+    if let Some(ip) = ctx.client_ip.as_deref() {
+        let key = format!("auth:setup:{ip}");
+        check_rate_limit(
+            &state.rate_limits,
+            &key,
+            5,
+            std::time::Duration::from_secs(60),
+        )?;
+    }
+
     let username = body.username.trim();
     if username.is_empty() {
         return Err(AppError::Validation("username is required".into()));
@@ -84,6 +98,21 @@ async fn setup(
 
     info!(username = %username, user_id = %user_id, "admin account created");
 
+    let _ = audit::insert(
+        &state.db.write,
+        audit::AuditEntry {
+            actor_user_id: Some(&user_id),
+            action: "auth.setup",
+            entity_type: "user",
+            entity_id: Some(&user_id),
+            metadata: json!({"username": username}),
+            ip: ctx.client_ip.as_deref(),
+            user_agent: ctx.user_agent.as_deref(),
+            request_id: Some(&ctx.request_id),
+        },
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(SetupResponse {
@@ -95,8 +124,19 @@ async fn setup(
 
 async fn login(
     State(state): State<AppState>,
+    Extension(ctx): Extension<RequestContext>,
     Json(body): Json<LoginRequest>,
 ) -> AppResult<(HeaderMap, Json<LoginResponse>)> {
+    if let Some(ip) = ctx.client_ip.as_deref() {
+        let key = format!("auth:login:{ip}");
+        check_rate_limit(
+            &state.rate_limits,
+            &key,
+            10,
+            std::time::Duration::from_secs(60),
+        )?;
+    }
+
     let username = body.username.trim();
     if username.is_empty() || body.password.is_empty() {
         return Err(AppError::Unauthorized);
@@ -106,13 +146,57 @@ async fn login(
         .await?
         .ok_or(AppError::Unauthorized)?;
 
+    if let Some(locked_until) = user.auth_locked_until.as_deref()
+        && let Ok(locked_at) = chrono::DateTime::parse_from_rfc3339(locked_until)
+        && Utc::now() < locked_at.with_timezone(&Utc)
+    {
+        let _ = audit::insert(
+            &state.db.write,
+            audit::AuditEntry {
+                actor_user_id: Some(&user.id),
+                action: "auth.locked",
+                entity_type: "user",
+                entity_id: Some(&user.id),
+                metadata: json!({"username": username}),
+                ip: ctx.client_ip.as_deref(),
+                user_agent: ctx.user_agent.as_deref(),
+                request_id: Some(&ctx.request_id),
+            },
+        )
+        .await;
+
+        return Err(AppError::AccountLocked);
+    }
+
     let stored_hash = user
         .password_hash
         .as_deref()
         .ok_or(AppError::Unauthorized)?;
     if !password::verify(&body.password, stored_hash)? {
+        let attempts = user.failed_login_attempts + 1;
+        let locked_until = compute_lockout(attempts);
+        users::update_failed_attempts(&state.db.write, &user.id, attempts, locked_until.as_deref())
+            .await?;
+
+        let _ = audit::insert(
+            &state.db.write,
+            audit::AuditEntry {
+                actor_user_id: Some(&user.id),
+                action: "auth.login_failed",
+                entity_type: "user",
+                entity_id: Some(&user.id),
+                metadata: json!({"username": username, "attempts": attempts}),
+                ip: ctx.client_ip.as_deref(),
+                user_agent: ctx.user_agent.as_deref(),
+                request_id: Some(&ctx.request_id),
+            },
+        )
+        .await;
+
         return Err(AppError::Unauthorized);
     }
+
+    users::clear_failed_attempts(&state.db.write, &user.id).await?;
 
     let auth_cfg = &state.config.auth;
     let access_ttl_minutes = i64::try_from(auth_cfg.access_token_ttl_minutes)
@@ -153,6 +237,7 @@ async fn login(
         &expires_at,
         None,
         None,
+        None,
     )
     .await?;
 
@@ -169,13 +254,53 @@ async fn login(
         .map_err(|e| AppError::Internal(format!("invalid Set-Cookie value: {e}")))?;
     headers.insert(SET_COOKIE, cookie_value);
 
+    let access_cookie = format!(
+        "access_token={}; HttpOnly; Path=/; Max-Age={}; SameSite=Strict{}",
+        access_token,
+        access_ttl_minutes * 60,
+        if state.config.tls.enabled {
+            "; Secure"
+        } else {
+            ""
+        }
+    );
+    if let Ok(value) = HeaderValue::from_str(&access_cookie) {
+        headers.append(SET_COOKIE, value);
+    }
+
+    let _ = audit::insert(
+        &state.db.write,
+        audit::AuditEntry {
+            actor_user_id: Some(&user.id),
+            action: "auth.login",
+            entity_type: "user",
+            entity_id: Some(&user.id),
+            metadata: json!({"username": username}),
+            ip: ctx.client_ip.as_deref(),
+            user_agent: ctx.user_agent.as_deref(),
+            request_id: Some(&ctx.request_id),
+        },
+    )
+    .await;
+
     Ok((headers, Json(LoginResponse { access_token })))
 }
 
 async fn refresh(
     State(state): State<AppState>,
+    Extension(ctx): Extension<RequestContext>,
     headers: HeaderMap,
 ) -> AppResult<(HeaderMap, Json<LoginResponse>)> {
+    if let Some(ip) = ctx.client_ip.as_deref() {
+        let key = format!("auth:refresh:{ip}");
+        check_rate_limit(
+            &state.rate_limits,
+            &key,
+            10,
+            std::time::Duration::from_secs(60),
+        )?;
+    }
+
     let raw_token = extract_refresh_token(&headers).ok_or(AppError::Unauthorized)?;
 
     let old_hash = tokens::hash_token(&raw_token);
@@ -184,7 +309,7 @@ async fn refresh(
         .ok_or(AppError::Unauthorized)?;
 
     if session.revoked_at.is_some() {
-        return Err(AppError::TokenRevoked);
+        return Err(AppError::TokenReused);
     }
 
     // Revoke the old token unconditionally (rotation)
@@ -228,6 +353,7 @@ async fn refresh(
         &user.id,
         &new_hash,
         &session.expires_at,
+        Some(&session.id),
         None,
         None,
     )
@@ -248,26 +374,86 @@ async fn refresh(
         .map_err(|e| AppError::Internal(format!("invalid Set-Cookie value: {e}")))?;
     response_headers.insert(SET_COOKIE, cookie_value);
 
+    let access_cookie = format!(
+        "access_token={}; HttpOnly; Path=/; Max-Age={}; SameSite=Strict{}",
+        access_token,
+        max_age,
+        if state.config.tls.enabled {
+            "; Secure"
+        } else {
+            ""
+        }
+    );
+    if let Ok(value) = HeaderValue::from_str(&access_cookie) {
+        response_headers.append(SET_COOKIE, value);
+    }
+
+    let _ = audit::insert(
+        &state.db.write,
+        audit::AuditEntry {
+            actor_user_id: Some(&user.id),
+            action: "auth.refresh",
+            entity_type: "refresh_token",
+            entity_id: Some(&session.id),
+            metadata: json!({"username": user.username}),
+            ip: ctx.client_ip.as_deref(),
+            user_agent: ctx.user_agent.as_deref(),
+            request_id: Some(&ctx.request_id),
+        },
+    )
+    .await;
+
     Ok((response_headers, Json(LoginResponse { access_token })))
 }
 
 async fn logout(
     State(state): State<AppState>,
+    Extension(ctx): Extension<RequestContext>,
     headers: HeaderMap,
 ) -> AppResult<(HeaderMap, StatusCode)> {
     if let Some(raw_token) = extract_refresh_token(&headers) {
         let hash = tokens::hash_token(&raw_token);
         if let Ok(Some(session)) = sessions::find_by_hash(&state.db.read, &hash).await {
             let _ = sessions::revoke_refresh_token(&state.db.write, &session.id, "logout").await;
+
+            let _ = audit::insert(
+                &state.db.write,
+                audit::AuditEntry {
+                    actor_user_id: Some(&session.user_id),
+                    action: "auth.logout",
+                    entity_type: "refresh_token",
+                    entity_id: Some(&session.id),
+                    metadata: json!({}),
+                    ip: ctx.client_ip.as_deref(),
+                    user_agent: ctx.user_agent.as_deref(),
+                    request_id: Some(&ctx.request_id),
+                },
+            )
+            .await;
         }
     }
 
     let cookie = "refresh_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict";
+    let access_cookie = "access_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict";
 
     let mut response_headers = HeaderMap::new();
     if let Ok(cookie_value) = HeaderValue::from_str(cookie) {
         response_headers.insert(SET_COOKIE, cookie_value);
     }
+    if let Ok(cookie_value) = HeaderValue::from_str(access_cookie) {
+        response_headers.append(SET_COOKIE, cookie_value);
+    }
 
     Ok((response_headers, StatusCode::NO_CONTENT))
+}
+
+fn compute_lockout(attempts: i64) -> Option<String> {
+    if attempts < 5 {
+        return None;
+    }
+
+    let exponent = (attempts - 5).clamp(0, 6) as u32;
+    let seconds = 60 * 2_u64.pow(exponent);
+    let lock_until = Utc::now() + Duration::seconds(seconds as i64);
+    Some(lock_until.to_rfc3339_opts(SecondsFormat::Secs, true))
 }

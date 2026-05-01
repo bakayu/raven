@@ -5,6 +5,7 @@ pub mod db;
 pub mod error;
 pub mod grpc;
 pub mod ingest;
+pub mod rate_limit;
 pub mod state;
 pub mod telemetry;
 

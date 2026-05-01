@@ -1,9 +1,16 @@
-use axum::{Router, routing::get};
+use axum::{Router, middleware::from_fn, routing::get};
+use tower_http::services::ServeDir;
 
+use crate::api::middleware::with_request_context;
 use crate::state::AppState;
 
 pub mod agents;
 pub mod auth;
+pub mod logs;
+pub mod metrics;
+pub mod middleware;
+pub mod users;
+pub mod ws;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -11,6 +18,12 @@ pub fn router(state: AppState) -> Router {
         .route("/readyz", get(readyz))
         .nest("/api/auth", auth::router())
         .nest("/api/agents", agents::router())
+        .nest("/api/users", users::router())
+        .nest("/api/metrics", metrics::router())
+        .nest("/api/logs", logs::router())
+        .nest("/api/ws", ws::router())
+        .fallback_service(ServeDir::new("dashboard/dist").append_index_html_on_directories(true))
+        .layer(from_fn(with_request_context))
         .with_state(state)
 }
 

@@ -130,6 +130,39 @@ impl ClickHouseClient {
         Ok(())
     }
 
+    pub async fn query_logs(&self, sql: &str) -> AppResult<Vec<Value>> {
+        let mut url =
+            Url::parse(&self.base_url).map_err(|e| AppError::ClickHouse(e.to_string()))?;
+        url.query_pairs_mut().append_pair("query", sql);
+
+        let response = self
+            .client
+            .post(url)
+            .header("Content-Type", "text/plain")
+            .header("Accept", "application/x-ndjson")
+            .send()
+            .await
+            .map_err(|e| AppError::ClickHouse(e.to_string()))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| AppError::ClickHouse(e.to_string()))?;
+        if !status.is_success() {
+            return Err(AppError::ClickHouse(format!(
+                "unexpected status {status}: {body}"
+            )));
+        }
+
+        let mut rows = Vec::new();
+        for line in body.lines().filter(|line| !line.trim().is_empty()) {
+            rows.push(serde_json::from_str(line)?);
+        }
+
+        Ok(rows)
+    }
+
     #[tracing::instrument(name = "ClickHouse execute_ddl", skip(self, query))]
     async fn execute_ddl(&self, query: &str) -> AppResult<()> {
         let response = self

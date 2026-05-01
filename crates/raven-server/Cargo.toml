@@ -40,6 +40,7 @@ dashmap = { workspace = true }
 rand = { workspace = true }
 rand_core = { workspace = true }
 rand_distr = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 httpmock = "0.8"

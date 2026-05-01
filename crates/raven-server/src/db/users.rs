@@ -11,6 +11,18 @@ pub struct User {
     pub role: String,
     pub failed_login_attempts: i64,
     pub auth_locked_until: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug)]
+pub struct UserRecord {
+    pub id: String,
+    pub username: String,
+    pub email: Option<String>,
+    pub role: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 pub async fn count(db: &SqlitePool) -> AppResult<i64> {
@@ -41,12 +53,36 @@ pub async fn create(
     Ok(id)
 }
 
+pub async fn create_with_optional_password(
+    db: &SqlitePool,
+    username: &str,
+    email: Option<&str>,
+    password_hash: Option<&str>,
+    role: &str,
+) -> AppResult<String> {
+    let id = sqlx::query_scalar!(
+        r#"
+        INSERT INTO users (username, email, password_hash, role)
+        VALUES (?, ?, ?, ?)
+        RETURNING id as "id!"
+        "#,
+        username,
+        email,
+        password_hash,
+        role,
+    )
+    .fetch_one(db)
+    .await?;
+
+    Ok(id)
+}
+
 pub async fn find_by_username(db: &SqlitePool, username: &str) -> AppResult<Option<User>> {
     let row = sqlx::query_as!(
         User,
         r#"
         SELECT id as "id!", username, email, password_hash, role,
-               failed_login_attempts, auth_locked_until
+            failed_login_attempts, auth_locked_until, created_at, updated_at
         FROM users
         WHERE username = ?
         "#,
@@ -62,8 +98,8 @@ pub async fn find_by_id(db: &SqlitePool, id: &str) -> AppResult<Option<User>> {
     let row = sqlx::query_as!(
         User,
         r#"
-        SELECT id as "id!", username, email, password_hash, role,
-               failed_login_attempts, auth_locked_until
+         SELECT id as "id!", username, email, password_hash, role,
+             failed_login_attempts, auth_locked_until, created_at, updated_at
         FROM users
         WHERE id = ?
         "#,
@@ -73,6 +109,97 @@ pub async fn find_by_id(db: &SqlitePool, id: &str) -> AppResult<Option<User>> {
     .await?;
 
     Ok(row)
+}
+
+pub async fn list(db: &SqlitePool) -> AppResult<Vec<UserRecord>> {
+    let rows = sqlx::query_as!(
+        UserRecord,
+        r#"
+        SELECT id as "id!", username, email, role, created_at, updated_at
+        FROM users
+        ORDER BY created_at DESC
+        "#,
+    )
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows)
+}
+
+pub async fn update_profile(
+    db: &SqlitePool,
+    user_id: &str,
+    username: Option<&str>,
+    email: Option<&str>,
+) -> AppResult<bool> {
+    let res = sqlx::query!(
+        r#"
+        UPDATE users
+        SET username = COALESCE(?, username),
+            email = COALESCE(?, email),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE id = ?
+        "#,
+        username,
+        email,
+        user_id,
+    )
+    .execute(db)
+    .await?;
+
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn update_role(db: &SqlitePool, user_id: &str, role: &str) -> AppResult<bool> {
+    let res = sqlx::query!(
+        r#"
+        UPDATE users
+        SET role = ?,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE id = ?
+        "#,
+        role,
+        user_id,
+    )
+    .execute(db)
+    .await?;
+
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn update_password_hash(
+    db: &SqlitePool,
+    user_id: &str,
+    password_hash: &str,
+) -> AppResult<bool> {
+    let res = sqlx::query!(
+        r#"
+        UPDATE users
+        SET password_hash = ?,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE id = ?
+        "#,
+        password_hash,
+        user_id,
+    )
+    .execute(db)
+    .await?;
+
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn delete(db: &SqlitePool, user_id: &str) -> AppResult<bool> {
+    let res = sqlx::query!(
+        r#"
+        DELETE FROM users
+        WHERE id = ?
+        "#,
+        user_id,
+    )
+    .execute(db)
+    .await?;
+
+    Ok(res.rows_affected() > 0)
 }
 
 pub async fn update_failed_attempts(
