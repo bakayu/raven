@@ -145,13 +145,10 @@ impl IntoResponse for AppError {
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
 
             // 503
-            AppError::VictoriaMetrics(_)
-            | AppError::ClickHouse(_)
-            | AppError::HttpClient(_)
-            | AppError::NotificationFailed(_) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "upstream service unavailable".to_string(),
-            ),
+            AppError::VictoriaMetrics(msg)
+            | AppError::ClickHouse(msg)
+            | AppError::NotificationFailed(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.clone()),
+            AppError::HttpClient(e) => (StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
 
             // 500 (everything else)
             AppError::Database(_)

@@ -40,12 +40,29 @@ async fn get_metrics(
         .as_deref()
         .unwrap_or_else(|| default_step(&from, &to));
 
-    let vm_query = format!(
-        "raven_{}_usage_percent{{hostname=\"{}\"}}",
-        metric,
-        host.replace('"', "\\\"")
-    );
-    let response = state.vm_client.query_range(&vm_query).await?;
+    let host_safe = host.replace('"', "\\\"");
+    let vm_query = match metric {
+        "cpu" => format!("raven_cpu_usage_percent{{hostname=\"{}\"}}", host_safe),
+        "memory" => format!(
+            "(raven_memory_used_bytes{{hostname=\"{0}\"}} / raven_memory_total_bytes{{hostname=\"{0}\"}}) * 100",
+            host_safe
+        ),
+        "disk" => format!("raven_fs_used_percent{{hostname=\"{}\"}}", host_safe),
+        "network_rx" => format!(
+            "sum(raven_net_iface_rx_bytes_per_sec{{hostname=\"{}\"}}) by (hostname)",
+            host_safe
+        ),
+        "network_tx" => format!(
+            "sum(raven_net_iface_tx_bytes_per_sec{{hostname=\"{}\"}}) by (hostname)",
+            host_safe
+        ),
+        "load_avg" => format!("raven_load_avg_1m{{hostname=\"{}\"}}", host_safe),
+        other => format!("raven_{}{{hostname=\"{}\"}}", other, host_safe),
+    };
+    let response = state
+        .vm_client
+        .query_range(&vm_query, from.timestamp(), to.timestamp(), step)
+        .await?;
 
     let mut payload = response;
     if let Some(obj) = payload.as_object_mut() {

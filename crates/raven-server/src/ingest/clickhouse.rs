@@ -131,15 +131,14 @@ impl ClickHouseClient {
     }
 
     pub async fn query_logs(&self, sql: &str) -> AppResult<Vec<Value>> {
-        let mut url =
-            Url::parse(&self.base_url).map_err(|e| AppError::ClickHouse(e.to_string()))?;
-        url.query_pairs_mut().append_pair("query", sql);
+        let url = Url::parse(&self.base_url).map_err(|e| AppError::ClickHouse(e.to_string()))?;
 
         let response = self
             .client
             .post(url)
             .header("Content-Type", "text/plain")
             .header("Accept", "application/x-ndjson")
+            .body(sql.to_string())
             .send()
             .await
             .map_err(|e| AppError::ClickHouse(e.to_string()))?;
@@ -161,6 +160,17 @@ impl ClickHouseClient {
         }
 
         Ok(rows)
+    }
+
+    pub async fn ping(&self) -> AppResult<()> {
+        self.client
+            .post(&self.base_url)
+            .body(String::new())
+            .send()
+            .await
+            .map_err(|e| AppError::ClickHouse(e.to_string()))?;
+
+        Ok(())
     }
 
     #[tracing::instrument(name = "ClickHouse execute_ddl", skip(self, query))]

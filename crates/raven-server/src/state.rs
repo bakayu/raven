@@ -73,6 +73,8 @@ impl AppState {
 #[cfg(test)]
 impl AppState {
     pub async fn for_test() -> Self {
+        use httpmock::MockServer;
+
         let db_path = std::env::temp_dir().join(format!(
             "raven_test_{}_{}.db",
             std::process::id(),
@@ -82,8 +84,22 @@ impl AppState {
                 .as_nanos()
         ));
 
+        let vm_mock = MockServer::start_async().await;
+        vm_mock.mock(|when, then| {
+            when.any_request();
+            then.status(200);
+        });
+
+        let ch_mock = MockServer::start_async().await;
+        ch_mock.mock(|when, then| {
+            when.any_request();
+            then.status(200);
+        });
+
         let mut config = RavenConfig::for_test();
         config.database.sqlite_path = db_path.to_str().expect("utf8 path").to_string();
+        config.database.victoria_metrics_url = vm_mock.base_url();
+        config.database.clickhouse_url = ch_mock.base_url();
 
         let db = Db::connect(&config.database.sqlite_path).await.unwrap();
         sqlx::migrate!("./migrations").run(&db.write).await.unwrap();

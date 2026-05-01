@@ -79,10 +79,20 @@ impl VictoriaMetricsClient {
         Ok(())
     }
 
-    pub async fn query_range(&self, query: &str) -> AppResult<Value> {
+    pub async fn query_range(
+        &self,
+        query: &str,
+        start: i64,
+        end: i64,
+        step: &str,
+    ) -> AppResult<Value> {
         let mut url = Url::parse(&format!("{}/api/v1/query_range", self.base_url))
             .map_err(|e| AppError::VictoriaMetrics(e.to_string()))?;
-        url.query_pairs_mut().append_pair("query", query);
+        url.query_pairs_mut()
+            .append_pair("query", query)
+            .append_pair("start", &start.to_string())
+            .append_pair("end", &end.to_string())
+            .append_pair("step", step);
         let response = self
             .client
             .get(url)
@@ -102,6 +112,16 @@ impl VictoriaMetricsClient {
         }
 
         serde_json::from_str(&body).map_err(AppError::from)
+    }
+
+    pub async fn ping(&self) -> AppResult<()> {
+        self.client
+            .get(&self.base_url)
+            .send()
+            .await
+            .map_err(|e| AppError::VictoriaMetrics(e.to_string()))?;
+
+        Ok(())
     }
 }
 
