@@ -265,6 +265,7 @@ fn count_log_streams(batch: &LogBatch) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::{tokens::create_agent_token, users};
     use prost_types::Timestamp;
     use raven_proto::proto::raven_ingestion_server::RavenIngestion;
     use tonic::Code;
@@ -272,7 +273,24 @@ mod tests {
     const TEST_TOKEN: &str = "rvn_test_token";
 
     async fn test_server() -> RavenServer {
-        RavenServer::new(AppState::for_test().await)
+        let server = RavenServer::new(AppState::for_test().await);
+        seed_test_agent_token(&server).await;
+        server
+    }
+
+    async fn seed_test_agent_token(server: &RavenServer) {
+        let owner_id = users::create(
+            &server.state.db.write,
+            "grpc-agent-owner",
+            "hash123",
+            "admin",
+        )
+        .await
+        .expect("create owner user");
+
+        create_agent_token(&server.state.db.write, "grpc-agent", TEST_TOKEN, &owner_id)
+            .await
+            .expect("create agent token");
     }
 
     fn with_auth<T>(payload: T) -> Request<T> {

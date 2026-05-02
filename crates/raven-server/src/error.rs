@@ -20,6 +20,9 @@ pub enum AppError {
     #[error("invalid or missing token")]
     Unauthorized,
 
+    #[error("forbidden")]
+    Forbidden,
+
     #[error("token has been revoked")]
     TokenRevoked,
 
@@ -123,7 +126,7 @@ impl IntoResponse for AppError {
             },
 
             // 403
-            AppError::AccountLocked | AppError::SetupAlreadyDone => {
+            AppError::AccountLocked | AppError::SetupAlreadyDone | AppError::Forbidden => {
                 (StatusCode::FORBIDDEN, self.to_string())
             }
 
@@ -142,13 +145,10 @@ impl IntoResponse for AppError {
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
 
             // 503
-            AppError::VictoriaMetrics(_)
-            | AppError::ClickHouse(_)
-            | AppError::HttpClient(_)
-            | AppError::NotificationFailed(_) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "upstream service unavailable".to_string(),
-            ),
+            AppError::VictoriaMetrics(msg)
+            | AppError::ClickHouse(msg)
+            | AppError::NotificationFailed(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.clone()),
+            AppError::HttpClient(e) => (StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
 
             // 500 (everything else)
             AppError::Database(_)
@@ -186,7 +186,7 @@ impl From<AppError> for Status {
             | AppError::Jwt(_) => Status::unauthenticated(err.to_string()),
 
             // PERMISSION_DENIED
-            AppError::AccountLocked | AppError::SetupAlreadyDone => {
+            AppError::AccountLocked | AppError::SetupAlreadyDone | AppError::Forbidden => {
                 Status::permission_denied(err.to_string())
             }
 

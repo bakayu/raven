@@ -1,10 +1,24 @@
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use sqlx::SqlitePool;
 use tracing::{debug, error, warn};
 
 use raven_proto::proto::RegisterRequest;
 
 use crate::{AppError, AppResult};
+
+#[derive(Debug, Serialize)]
+pub struct AgentRow {
+    pub id: String,
+    pub token_id: String,
+    pub hostname: String,
+    pub ip: Option<String>,
+    pub os: String,
+    pub agent_version: String,
+    pub log_files: String,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+}
 
 /// Insert new agent on register, update if token_id and hostname exist
 /// in the agents table
@@ -59,6 +73,128 @@ pub async fn upsert_agent(
     );
 
     Ok(())
+}
+
+#[tracing::instrument(name = "listing all agents", skip(db))]
+pub async fn list_agents(db: &SqlitePool) -> AppResult<Vec<AgentRow>> {
+    let rows = sqlx::query_as!(
+        AgentRow,
+        r#"
+        SELECT
+            id as "id!",
+            token_id,
+            hostname,
+            ip,
+            os as "os!",
+            agent_version as "agent_version!",
+            log_files,
+            first_seen_at,
+            last_seen_at
+        FROM agents
+        ORDER BY first_seen_at DESC
+        "#
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, "failed to list agents");
+        e
+    })?;
+
+    Ok(rows)
+}
+
+/// List agents filtered by token ownership (for non-admin users).
+#[tracing::instrument(
+    name = "listing agents for user",
+    skip(db),
+    fields(user_id = %user_id)
+)]
+pub async fn list_agents_for_user(db: &SqlitePool, user_id: &str) -> AppResult<Vec<AgentRow>> {
+    let rows = sqlx::query_as!(
+        AgentRow,
+        r#"
+        SELECT
+            a.id as "id!",
+            a.token_id,
+            a.hostname,
+            a.ip,
+            a.os as "os!",
+            a.agent_version as "agent_version!",
+            a.log_files,
+            a.first_seen_at,
+            a.last_seen_at
+        FROM agents a
+        INNER JOIN agent_tokens t ON a.token_id = t.id
+        WHERE t.created_by = ?
+        ORDER BY a.first_seen_at DESC
+        "#,
+        user_id
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, user_id = %user_id, "failed to list agents for user");
+        e
+    })?;
+
+    debug!(count = rows.len(), user_id = %user_id, "listed agents for user");
+    Ok(rows)
+}
+
+/// Delete an agent by id, scoped to the owner of the associated token.
+#[tracing::instrument(
+    name = "deleting agent",
+    skip(db),
+    fields(agent_id = %agent_id, user_id = %user_id)
+)]
+pub async fn delete_agent(db: &SqlitePool, agent_id: &str, user_id: &str) -> AppResult<bool> {
+    let res = sqlx::query!(
+        r#"
+        DELETE FROM agents
+        WHERE id = ?
+          AND token_id IN (SELECT id FROM agent_tokens WHERE created_by = ?)
+        "#,
+        agent_id,
+        user_id
+    )
+    .execute(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, agent_id = %agent_id, user_id = %user_id, "failed to delete agent");
+        e
+    })?;
+
+    let deleted = res.rows_affected() > 0;
+    if deleted {
+        debug!(agent_id = %agent_id, user_id = %user_id, "agent deleted");
+    } else {
+        warn!(agent_id = %agent_id, user_id = %user_id, "no agent deleted (not found or not owned)");
+    }
+    Ok(deleted)
+}
+
+/// Delete an agent by id without ownership check (admin).
+#[tracing::instrument(
+    name = "deleting agent (admin)",
+    skip(db),
+    fields(agent_id = %agent_id)
+)]
+pub async fn delete_agent_any(db: &SqlitePool, agent_id: &str) -> AppResult<bool> {
+    let res = sqlx::query!(
+        r#"
+        DELETE FROM agents WHERE id = ?
+        "#,
+        agent_id
+    )
+    .execute(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, agent_id = %agent_id, "failed to delete agent (admin)");
+        e
+    })?;
+
+    Ok(res.rows_affected() > 0)
 }
 
 /// update "last_seen_at" for an agent
@@ -138,7 +274,7 @@ pub async fn load_all_agents(db: &SqlitePool) -> AppResult<Vec<(String, String, 
 mod tests {
     use super::*;
     use crate::Db;
-    use crate::db::tokens::{seed_dev_token, validate_agent_token};
+    use crate::db::{tokens::create_agent_token, tokens::validate_agent_token, users};
     use raven_proto::proto::RegisterRequest;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -162,12 +298,17 @@ mod tests {
             .run(&db.write)
             .await
             .expect("run migrations");
-
-        seed_dev_token(&db.write, "rvn_test_token")
-            .await
-            .expect("seed dev token");
-
         (db, path)
+    }
+
+    async fn seed_agent_token(db: &Db) -> String {
+        let owner_id = users::create(&db.write, "agent-owner", "hash123", "admin")
+            .await
+            .expect("create owner user");
+
+        create_agent_token(&db.write, "test-agent", "rvn_test_token", &owner_id)
+            .await
+            .expect("create agent token")
     }
 
     fn sample_register(hostname: &str) -> RegisterRequest {
@@ -184,10 +325,14 @@ mod tests {
     async fn load_all_agents_returns_inserted_agent() {
         let (db, path) = setup_db("load_all_agents").await;
 
-        let token_id = validate_agent_token(&db.read, "rvn_test_token")
+        let token_id = seed_agent_token(&db).await;
+
+        let validated = validate_agent_token(&db.read, "rvn_test_token")
             .await
             .expect("validate token")
             .expect("token exists");
+
+        assert_eq!(validated, token_id);
 
         let req = sample_register("host-a");
         upsert_agent(&db.write, &req, token_id.as_str(), Some("10.0.0.1"))
@@ -227,10 +372,14 @@ mod tests {
     async fn update_last_seen_changes_timestamp_for_existing_agent() {
         let (db, path) = setup_db("update_last_seen_ok").await;
 
-        let token_id = validate_agent_token(&db.read, "rvn_test_token")
+        let token_id = seed_agent_token(&db).await;
+
+        let validated = validate_agent_token(&db.read, "rvn_test_token")
             .await
             .expect("validate token")
             .expect("token exists");
+
+        assert_eq!(validated, token_id);
 
         let req = sample_register("host-b");
         upsert_agent(&db.write, &req, token_id.as_str(), Some("10.0.0.2"))

@@ -28,6 +28,8 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
+axum-extra = { workspace = true }
+hyper = { workspace = true }
 reqwest = { workspace = true }
 sqlx = { workspace = true }
 config = { workspace = true }
@@ -35,7 +37,12 @@ secrecy = { workspace = true }
 jsonwebtoken = { workspace = true }
 argon2 = { workspace = true }
 dashmap = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+rand_distr = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
-httpmock = "0.7"
+httpmock = "0.8"
 urlencoding = "2"
+tower = "0.5"

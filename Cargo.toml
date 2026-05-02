@@ -31,6 +31,7 @@ axum-extra = { version = "0.12", features = ["cookie", "typed-header"] }
 tower = "0.5"
 reqwest = { version = "0.13", features = ["json"] }
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+hyper = "1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -47,8 +48,8 @@ sqlx = { version = "0.8", features = [
 ] }
 
 # Auth
-jsonwebtoken = "10"
-argon2 = "0.5"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+argon2 = { version = "0.5", features = ["std"] }
 
 # Notifications
 lettre = { version = "0.11", default-features = false, features = [
@@ -78,7 +79,9 @@ uuid = { version = "1", features = ["v4"] }
 sha2 = "0.11"
 hex = "0.4"
 dashmap = "6"
-rand = "0.10"
+rand = { version = "0.10", features = ["std"] }
+rand_core = "0.10"
+rand_distr = "0.6"
 thiserror = "2"
 anyhow = "1"
 config = "0.15"
