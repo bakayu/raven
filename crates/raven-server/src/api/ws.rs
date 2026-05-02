@@ -8,6 +8,7 @@ use axum::{
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::broadcast;
+use chrono::TimeZone;
 
 use crate::state::AppState;
 
@@ -54,12 +55,22 @@ async fn handle_logs_socket(socket: WebSocket, state: AppState, query: LogWsQuer
                                 _ => "unknown",
                             };
 
+                            let timestamp = entry.timestamp.as_ref().or(batch.sent_at.as_ref())
+                                .map(|ts| {
+                                    chrono::Utc.timestamp_opt(ts.seconds, ts.nanos as u32)
+                                        .single()
+                                        .unwrap_or_else(chrono::Utc::now)
+                                        .to_rfc3339()
+                                })
+                                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+
                             let payload = serde_json::json!({
                                 "hostname": batch.hostname,
                                 "app": batch.source,
                                 "stream": stream,
-                                "path": entry.path,
+                                "file": entry.path,
                                 "line": entry.line,
+                                "timestamp": timestamp,
                             });
 
                             if sender.send(Message::Text(payload.to_string().into())).await.is_err() {

@@ -27,6 +27,8 @@ services:
   victoriametrics:
     image: victoriametrics/victoria-metrics:v1.137.0
     restart: unless-stopped
+    ports:
+      - "8428:8428"
     command:
       - -storageDataPath=/victoria-metrics-data
       - -retentionPeriod=30d
@@ -42,6 +44,8 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:26.2-alpine
     restart: unless-stopped
+    ports:
+      - "8123:8123"
     environment:
       CLICKHOUSE_DB: raven
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"

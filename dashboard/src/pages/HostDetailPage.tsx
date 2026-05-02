@@ -22,6 +22,14 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB/s`;
 }
 
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes.toFixed(0)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  return `${(bytes / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
+}
+
 export default function HostDetailPage() {
   const { hostname } = useParams<{ hostname: string }>();
   const { accessToken } = useAuth();
@@ -69,6 +77,19 @@ export default function HostDetailPage() {
     metrics?.disk?.length
       ? metrics.disk[metrics.disk.length - 1].value.toFixed(1)
       : null;
+
+  const latestMemUsed = metrics?.memory_used?.length
+    ? metrics.memory_used[metrics.memory_used.length - 1].value
+    : null;
+  const latestMemTotal = metrics?.memory_total?.length
+    ? metrics.memory_total[metrics.memory_total.length - 1].value
+    : null;
+  const latestDiskUsed = metrics?.disk_used?.length
+    ? metrics.disk_used[metrics.disk_used.length - 1].value
+    : null;
+  const latestDiskTotal = metrics?.disk_total?.length
+    ? metrics.disk_total[metrics.disk_total.length - 1].value
+    : null;
 
   return (
     <div className="fade-in">
@@ -161,6 +182,11 @@ export default function HostDetailPage() {
               <div className="stat-value" style={{ color: "var(--chart-2)" }}>
                 {latestMem}%
               </div>
+              {latestMemUsed != null && latestMemTotal != null && (
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
+                  {formatSize(latestMemUsed)} / {formatSize(latestMemTotal)}
+                </div>
+              )}
             </div>
           )}
           {latestDisk && (
@@ -172,6 +198,11 @@ export default function HostDetailPage() {
               <div className="stat-value" style={{ color: "var(--chart-3)" }}>
                 {latestDisk}%
               </div>
+              {latestDiskUsed != null && latestDiskTotal != null && (
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
+                  {formatSize(latestDiskUsed)} / {formatSize(latestDiskTotal)}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -252,6 +283,19 @@ export default function HostDetailPage() {
               />
             </div>
           )}
+          {(metrics.load_avg?.length ?? 0) > 0 && (
+            <div className="card" style={{ padding: 20 }}>
+              <MetricChart
+                data={metrics.load_avg!}
+                label="Load Average (1m)"
+                unit=""
+                color="var(--chart-4)"
+                domain={[0, "auto" as unknown as number]}
+                height={180}
+                formatValue={(v) => v.toFixed(2)}
+              />
+            </div>
+          )}
           {metrics.network_rx?.length && metrics.network_tx?.length ? (
             <div className="card" style={{ padding: 20, gridColumn: "1 / -1" }}>
               <div
@@ -298,19 +342,6 @@ export default function HostDetailPage() {
               </div>
             </div>
           ) : null}
-          {(metrics.load_avg?.length ?? 0) > 0 && (
-            <div className="card" style={{ padding: 20 }}>
-              <MetricChart
-                data={metrics.load_avg!}
-                label="Load Average (1m)"
-                unit=""
-                color="var(--chart-4)"
-                domain={[0, "auto" as unknown as number]}
-                height={180}
-                formatValue={(v) => v.toFixed(2)}
-              />
-            </div>
-          )}
         </div>
       ) : null}
 

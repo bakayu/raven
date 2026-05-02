@@ -141,14 +141,19 @@ impl ClickHouseClient {
             .body(sql.to_string())
             .send()
             .await
-            .map_err(|e| AppError::ClickHouse(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("ClickHouse query failed: {}", e);
+                AppError::ClickHouse(e.to_string())
+            })?;
 
         let status = response.status();
         let body = response
             .text()
             .await
             .map_err(|e| AppError::ClickHouse(e.to_string()))?;
+            
         if !status.is_success() {
+            tracing::error!("ClickHouse query returned {}: {}", status, body);
             return Err(AppError::ClickHouse(format!(
                 "unexpected status {status}: {body}"
             )));
@@ -156,7 +161,13 @@ impl ClickHouseClient {
 
         let mut rows = Vec::new();
         for line in body.lines().filter(|line| !line.trim().is_empty()) {
-            rows.push(serde_json::from_str(line)?);
+            match serde_json::from_str(line) {
+                Ok(row) => rows.push(row),
+                Err(e) => {
+                    tracing::error!("Failed to parse ClickHouse row '{}': {}", line, e);
+                    return Err(AppError::ClickHouse(format!("parse error: {}", e)));
+                }
+            }
         }
 
         Ok(rows)

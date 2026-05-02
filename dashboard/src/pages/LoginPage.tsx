@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { useAuth } from "../auth-context";
-import { Bird, Eye, EyeOff, AlertCircle } from "lucide-react";
+import { Eye, EyeOff, AlertCircle } from "lucide-react";
 
 export default function LoginPage() {
   const { login, setup, needsSetup, ready, accessToken } = useAuth();
@@ -90,17 +90,22 @@ export default function LoginPage() {
       <div style={{ marginBottom: 32, textAlign: "center" }}>
         <div
           style={{
-            width: 44,
-            height: 44,
-            borderRadius: 10,
-            background: "var(--text-primary)",
+            width: 48,
+            height: 48,
+            borderRadius: 12,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             margin: "0 auto 12px",
           }}
         >
-          <Bird size={24} color="#000" strokeWidth={2.5} />
+          <img
+            src="/raven-icon.svg"
+            alt="Raven"
+            width={48}
+            height={48}
+            style={{ borderRadius: 10 }}
+          />
         </div>
         <h1
           style={{

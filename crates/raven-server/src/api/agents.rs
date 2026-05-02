@@ -9,7 +9,7 @@ use rand_distr::Alphanumeric;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    auth::middleware::{RequireAdmin, RequireAuth},
+    auth::middleware::RequireAuth,
     db::{
         agents,
         tokens::{self, AgentToken},
@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(list_active_agents))
         .route("/tokens", post(generate_token).get(list_tokens))
         .route("/tokens/{id}", delete(revoke_token))
+        .route("/{id}", delete(remove_agent))
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,9 +38,10 @@ struct GenerateTokenResponse {
     message: &'static str,
 }
 
+/// Any authenticated user can create agent tokens (scoped to their own account).
 async fn generate_token(
     State(state): State<AppState>,
-    RequireAdmin(claims): RequireAdmin,
+    RequireAuth(claims): RequireAuth,
     Json(body): Json<GenerateTokenRequest>,
 ) -> AppResult<(StatusCode, Json<GenerateTokenResponse>)> {
     let name = body.name.trim();
@@ -67,11 +69,16 @@ async fn generate_token(
     ))
 }
 
+/// Admin sees all tokens; member sees only their own.
 async fn list_tokens(
     State(state): State<AppState>,
     RequireAuth(claims): RequireAuth,
 ) -> AppResult<Json<Vec<AgentToken>>> {
-    let agent_tokens = tokens::list_agent_tokens(&state.db.read, &claims.sub, false).await?;
+    let agent_tokens = if claims.role == "admin" {
+        tokens::list_all_agent_tokens(&state.db.read, false).await?
+    } else {
+        tokens::list_agent_tokens(&state.db.read, &claims.sub, false).await?
+    };
     Ok(Json(agent_tokens))
 }
 
@@ -80,7 +87,11 @@ async fn revoke_token(
     RequireAuth(claims): RequireAuth,
     Path(token_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let revoked = tokens::revoke_agent_token(&state.db.write, &token_id, &claims.sub).await?;
+    let revoked = if claims.role == "admin" {
+        tokens::revoke_agent_token_any(&state.db.write, &token_id).await?
+    } else {
+        tokens::revoke_agent_token(&state.db.write, &token_id, &claims.sub).await?
+    };
     if !revoked {
         return Err(AppError::AgentNotFound);
     }
@@ -101,11 +112,16 @@ struct AgentResponse {
     online: bool,
 }
 
+/// Admin sees all agents; member sees only agents linked to their own tokens.
 async fn list_active_agents(
     State(state): State<AppState>,
-    RequireAuth(_): RequireAuth,
+    RequireAuth(claims): RequireAuth,
 ) -> AppResult<Json<Vec<AgentResponse>>> {
-    let db_rows = agents::list_agents(&state.db.read).await?;
+    let db_rows = if claims.role == "admin" {
+        agents::list_agents(&state.db.read).await?
+    } else {
+        agents::list_agents_for_user(&state.db.read, &claims.sub).await?
+    };
 
     let now = chrono::Utc::now();
     let agent_miss_threshold = chrono::Duration::seconds(60);
@@ -148,4 +164,21 @@ async fn list_active_agents(
         .collect();
 
     Ok(Json(agents))
+}
+
+/// Remove an agent (admin can delete any, member can delete only their own).
+async fn remove_agent(
+    State(state): State<AppState>,
+    RequireAuth(claims): RequireAuth,
+    Path(agent_id): Path<String>,
+) -> AppResult<StatusCode> {
+    let deleted = if claims.role == "admin" {
+        agents::delete_agent_any(&state.db.write, &agent_id).await?
+    } else {
+        agents::delete_agent(&state.db.write, &agent_id, &claims.sub).await?
+    };
+    if !deleted {
+        return Err(AppError::AgentNotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }

@@ -54,6 +54,7 @@ struct UserResponse {
     role: String,
     created_at: String,
     updated_at: String,
+    last_login_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +77,7 @@ fn map_user(row: users::User) -> UserResponse {
         role: row.role,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        last_login_at: row.last_login_at,
     }
 }
 
@@ -87,6 +89,7 @@ fn map_user_record(row: users::UserRecord) -> UserResponse {
         role: row.role,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        last_login_at: row.last_login_at,
     }
 }
 

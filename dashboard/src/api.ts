@@ -52,7 +52,11 @@ export type MetricPoint = {
 export type MetricsData = {
   cpu: MetricPoint[];
   memory: MetricPoint[];
+  memory_total?: MetricPoint[];
+  memory_used?: MetricPoint[];
   disk: MetricPoint[];
+  disk_total?: MetricPoint[];
+  disk_used?: MetricPoint[];
   network_rx?: MetricPoint[];
   network_tx?: MetricPoint[];
   load_avg?: MetricPoint[];
@@ -128,14 +132,26 @@ export async function login(username: string, password: string) {
   return data as { access_token: string };
 }
 
+let refreshPromise: Promise<{ access_token: string }> | null = null;
+
 export async function refresh() {
-  const res = await fetch(`/api/auth/refresh`, {
-    method: "POST",
-    credentials: "include",
-  });
-  const data = await handleJSON(res);
-  if (!res.ok) throw new Error(data?.message || res.statusText);
-  return data as { access_token: string };
+  if (refreshPromise) return refreshPromise;
+  
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`/api/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await handleJSON(res);
+      if (!res.ok) throw new Error(data?.message || res.statusText);
+      return data as { access_token: string };
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  
+  return refreshPromise;
 }
 
 export async function logout() {
@@ -167,6 +183,15 @@ export async function getAgents(accessToken: string) {
   const data = await handleJSON(res);
   if (!res.ok) throw new Error(data?.message || res.statusText);
   return data as Agent[];
+}
+
+export async function deleteAgent(accessToken: string, id: string) {
+  const res = await fetch(`/api/agents/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await handleJSON(res);
+  if (!res.ok) throw new Error(data?.message || res.statusText);
 }
 
 // ─── Agent Tokens ────────────────────────────────────────────────────────────────
@@ -221,7 +246,7 @@ export async function getMetrics(
   hostname: string,
   timeRange: string,
 ): Promise<MetricsData> {
-  const metricsList = ["cpu", "memory", "disk", "network_rx", "network_tx", "load_avg"];
+  const metricsList = ["cpu", "memory", "memory_total", "memory_used", "disk", "disk_total", "disk_used", "network_rx", "network_tx", "load_avg"];
   const promises = metricsList.map(async (metric) => {
     const params = new URLSearchParams({ host: hostname, range: timeRange, metric });
     const res = await fetch(`/api/metrics?${params}`, {
@@ -232,8 +257,8 @@ export async function getMetrics(
     return parseVMResponse(data);
   });
 
-  const [cpu, memory, disk, network_rx, network_tx, load_avg] = await Promise.all(promises);
-  return { cpu, memory, disk, network_rx, network_tx, load_avg };
+  const [cpu, memory, memory_total, memory_used, disk, disk_total, disk_used, network_rx, network_tx, load_avg] = await Promise.all(promises);
+  return { cpu, memory, memory_total, memory_used, disk, disk_total, disk_used, network_rx, network_tx, load_avg };
 }
 
 // ─── Logs ───────────────────────────────────────────────────────────────────────
@@ -410,7 +435,9 @@ export function openLogTail(
   onLine: (entry: LogEntry) => void,
 ): WebSocket {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const params = new URLSearchParams({ host: hostname, app });
+  const params = new URLSearchParams();
+  if (hostname && hostname !== "*") params.append("host", hostname);
+  if (app && app !== "*") params.append("app", app);
   const ws = new WebSocket(`${proto}://${location.host}/api/ws/logs?${params}`);
   ws.onmessage = (ev) => {
     try {

@@ -7,6 +7,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::auth::middleware::RequireAuth;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -39,6 +40,7 @@ struct LogRow {
 
 async fn get_logs(
     State(state): State<AppState>,
+    RequireAuth(_): RequireAuth,
     Query(query): Query<LogsQuery>,
 ) -> AppResult<Json<Value>> {
     let (from, to) = resolve_time_window(
@@ -51,8 +53,8 @@ async fn get_logs(
 
     let mut sql = format!(
         "SELECT timestamp, hostname, app, file, stream, line FROM logs WHERE timestamp >= toDateTime64('{}', 3, 'UTC') AND timestamp <= toDateTime64('{}', 3, 'UTC')",
-        from.to_rfc3339(),
-        to.to_rfc3339()
+        from.format("%Y-%m-%d %H:%M:%S"),
+        to.format("%Y-%m-%d %H:%M:%S")
     );
 
     if let Some(host) = query.host.as_deref() {

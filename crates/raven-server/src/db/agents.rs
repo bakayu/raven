@@ -104,6 +104,99 @@ pub async fn list_agents(db: &SqlitePool) -> AppResult<Vec<AgentRow>> {
     Ok(rows)
 }
 
+/// List agents filtered by token ownership (for non-admin users).
+#[tracing::instrument(
+    name = "listing agents for user",
+    skip(db),
+    fields(user_id = %user_id)
+)]
+pub async fn list_agents_for_user(db: &SqlitePool, user_id: &str) -> AppResult<Vec<AgentRow>> {
+    let rows = sqlx::query_as!(
+        AgentRow,
+        r#"
+        SELECT
+            a.id as "id!",
+            a.token_id,
+            a.hostname,
+            a.ip,
+            a.os as "os!",
+            a.agent_version as "agent_version!",
+            a.log_files,
+            a.first_seen_at,
+            a.last_seen_at
+        FROM agents a
+        INNER JOIN agent_tokens t ON a.token_id = t.id
+        WHERE t.created_by = ?
+        ORDER BY a.first_seen_at DESC
+        "#,
+        user_id
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, user_id = %user_id, "failed to list agents for user");
+        e
+    })?;
+
+    debug!(count = rows.len(), user_id = %user_id, "listed agents for user");
+    Ok(rows)
+}
+
+/// Delete an agent by id, scoped to the owner of the associated token.
+#[tracing::instrument(
+    name = "deleting agent",
+    skip(db),
+    fields(agent_id = %agent_id, user_id = %user_id)
+)]
+pub async fn delete_agent(db: &SqlitePool, agent_id: &str, user_id: &str) -> AppResult<bool> {
+    let res = sqlx::query!(
+        r#"
+        DELETE FROM agents
+        WHERE id = ?
+          AND token_id IN (SELECT id FROM agent_tokens WHERE created_by = ?)
+        "#,
+        agent_id,
+        user_id
+    )
+    .execute(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, agent_id = %agent_id, user_id = %user_id, "failed to delete agent");
+        e
+    })?;
+
+    let deleted = res.rows_affected() > 0;
+    if deleted {
+        debug!(agent_id = %agent_id, user_id = %user_id, "agent deleted");
+    } else {
+        warn!(agent_id = %agent_id, user_id = %user_id, "no agent deleted (not found or not owned)");
+    }
+    Ok(deleted)
+}
+
+/// Delete an agent by id without ownership check (admin).
+#[tracing::instrument(
+    name = "deleting agent (admin)",
+    skip(db),
+    fields(agent_id = %agent_id)
+)]
+pub async fn delete_agent_any(db: &SqlitePool, agent_id: &str) -> AppResult<bool> {
+    let res = sqlx::query!(
+        r#"
+        DELETE FROM agents WHERE id = ?
+        "#,
+        agent_id
+    )
+    .execute(db)
+    .await
+    .map_err(|e| {
+        error!(error = %e, agent_id = %agent_id, "failed to delete agent (admin)");
+        e
+    })?;
+
+    Ok(res.rows_affected() > 0)
+}
+
 /// update "last_seen_at" for an agent
 #[tracing::instrument(
     name="updating last seen of agent",

@@ -108,7 +108,7 @@ function TokensSection({ accessToken }: { accessToken: string }) {
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
             <span style={{ fontWeight: 600, fontSize: 13 }}>
-              🔑 Token created — copy it now
+              Token created — copy it now
             </span>
             <button
               onClick={() => setNewToken(null)}

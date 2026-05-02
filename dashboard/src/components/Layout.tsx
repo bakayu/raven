@@ -3,17 +3,18 @@ import type { NavLinkRenderProps } from "react-router-dom";
 import {
   Server,
   ScrollText,
-  Bell,
+  // Bell,  // alerts - hidden until alerting engine is ready
   Settings,
   LogOut,
-  Bird,
+  // BarChart3,  // metrics - phase 6
 } from "lucide-react";
 import { useAuth } from "../auth-context";
 
 const navItems = [
   { to: "/agents", label: "Agents", icon: Server },
   { to: "/logs", label: "Logs", icon: ScrollText },
-  { to: "/alerts", label: "Alerts", icon: Bell, disabled: true },
+  // { to: "/metrics", label: "Metrics", icon: BarChart3 },  // phase 6
+  // { to: "/alerts", label: "Alerts", icon: Bell, disabled: true },  // hidden until alerting engine is ready
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -28,7 +29,7 @@ export default function Layout() {
         {/* Logo */}
         <div
           style={{
-            padding: "20px 16px 16px",
+            padding: "16px 12px 14px",
             borderBottom: "1px solid var(--border)",
           }}
         >
@@ -37,7 +38,6 @@ export default function Layout() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "8px",
               background: "none",
               border: "none",
               cursor: "pointer",
@@ -45,28 +45,20 @@ export default function Layout() {
             }}
           >
             <img
-              src="/raven-icon.svg"
-              alt="Raven Logo"
-              width={28}
-              height={28}
-              style={{ borderRadius: 6 }}
-            />
-            <span
+              src="/raven-logo-horizontal-full-light.png"
+              alt="Raven"
               style={{
-                fontSize: 15,
-                fontWeight: 600,
-                color: "var(--text-primary)",
-                letterSpacing: "-0.02em",
+                height: 28,
+                width: "auto",
+                objectFit: "contain",
               }}
-            >
-              Raven
-            </span>
+            />
           </button>
         </div>
 
         {/* Navigation */}
         <nav style={{ flex: 1, padding: "12px 8px" }}>
-          {navItems.map(({ to, label, icon: Icon, disabled }) => {
+          {navItems.map(({ to, label, icon: Icon, disabled }: any) => {
             if (disabled) {
               return (
                 <div

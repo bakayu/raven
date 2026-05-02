@@ -10,10 +10,125 @@ import {
   ChevronRight,
   Wifi,
   WifiOff,
+  Trash2,
+  AlertTriangle,
+  X,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
-function AgentCard({ agent }: { agent: api.Agent }) {
+// ──────────────────────────────────────────────────────────────────────────────
+// Confirmation dialog component
+// ──────────────────────────────────────────────────────────────────────────────
+
+function ConfirmDialog({
+  open,
+  title,
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+  loading,
+}: {
+  open: boolean;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  loading?: boolean;
+}) {
+  if (!open) return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 9999,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0, 0, 0, 0.6)",
+        backdropFilter: "blur(4px)",
+        animation: "fadeIn 0.15s ease",
+      }}
+      onClick={onCancel}
+    >
+      <div
+        className="card"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          padding: 24,
+          maxWidth: 420,
+          width: "90%",
+          animation: "fadeIn 0.15s ease",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              background: "var(--error-bg)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <AlertTriangle size={18} color="var(--error)" strokeWidth={2} />
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)" }}>
+              {title}
+            </div>
+          </div>
+          <button
+            onClick={onCancel}
+            style={{
+              marginLeft: "auto",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "var(--text-muted)",
+              padding: 4,
+              display: "flex",
+            }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 20 }}>
+          {message}
+        </p>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button className="btn btn-secondary btn-sm" onClick={onCancel} disabled={loading}>
+            Cancel
+          </button>
+          <button className="btn btn-danger btn-sm" onClick={onConfirm} disabled={loading}>
+            <Trash2 size={12} />
+            {loading ? "Removing…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Agent card
+// ──────────────────────────────────────────────────────────────────────────────
+
+function AgentCard({
+  agent,
+  onRemove,
+}: {
+  agent: api.Agent;
+  onRemove: (agent: api.Agent) => void;
+}) {
   const navigate = useNavigate();
   const lastSeen = formatDistanceToNow(new Date(agent.last_seen_at), {
     addSuffix: true,
@@ -105,13 +220,40 @@ function AgentCard({ agent }: { agent: api.Agent }) {
             {agent.log_files.length} log source{agent.log_files.length !== 1 ? "s" : ""}
           </div>
         )}
-        <div style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-muted)" }}>
-          v{agent.agent_version}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+            v{agent.agent_version}
+          </span>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove(agent);
+            }}
+            title="Remove agent"
+            style={{
+              padding: "3px 6px",
+              color: "var(--text-muted)",
+              transition: "color 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.color = "var(--error)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)";
+            }}
+          >
+            <Trash2 size={12} strokeWidth={1.75} />
+          </button>
         </div>
       </div>
     </div>
   );
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Agents page
+// ──────────────────────────────────────────────────────────────────────────────
 
 export default function AgentsPage() {
   const { accessToken } = useAuth();
@@ -119,6 +261,10 @@ export default function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Remove dialog state
+  const [removeTarget, setRemoveTarget] = useState<api.Agent | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const load = useCallback(
     async (silent = false) => {
@@ -145,11 +291,37 @@ export default function AgentsPage() {
     return () => clearInterval(interval);
   }, [load]);
 
+  async function onConfirmRemove() {
+    if (!removeTarget || !accessToken) return;
+    setRemoving(true);
+    try {
+      await api.deleteAgent(accessToken, removeTarget.id);
+      setRemoveTarget(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove agent");
+      setRemoveTarget(null);
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   const online = agents.filter((a) => a.online);
   const offline = agents.filter((a) => !a.online);
 
   return (
     <div className="fade-in">
+      {/* Confirm remove dialog */}
+      <ConfirmDialog
+        open={!!removeTarget}
+        title="Remove agent"
+        message={`Are you sure you want to remove "${removeTarget?.hostname ?? ""}"? This will delete the agent's registration. The agent can re-register if it's still running with a valid token.`}
+        confirmLabel="Remove"
+        onConfirm={onConfirmRemove}
+        onCancel={() => setRemoveTarget(null)}
+        loading={removing}
+      />
+
       {/* Page header */}
       <div className="flex-between" style={{ marginBottom: 28 }}>
         <div>
@@ -268,7 +440,7 @@ export default function AgentsPage() {
                 }}
               >
                 {online.map((a) => (
-                  <AgentCard key={a.id} agent={a} />
+                  <AgentCard key={a.id} agent={a} onRemove={setRemoveTarget} />
                 ))}
               </div>
             </div>
@@ -289,7 +461,7 @@ export default function AgentsPage() {
                 }}
               >
                 {offline.map((a) => (
-                  <AgentCard key={a.id} agent={a} />
+                  <AgentCard key={a.id} agent={a} onRemove={setRemoveTarget} />
                 ))}
               </div>
             </div>

@@ -47,7 +47,11 @@ async fn get_metrics(
             "(raven_memory_used_bytes{{hostname=\"{0}\"}} / raven_memory_total_bytes{{hostname=\"{0}\"}}) * 100",
             host_safe
         ),
+        "memory_total" => format!("raven_memory_total_bytes{{hostname=\"{}\"}}", host_safe),
+        "memory_used" => format!("raven_memory_used_bytes{{hostname=\"{}\"}}", host_safe),
         "disk" => format!("raven_fs_used_percent{{hostname=\"{}\"}}", host_safe),
+        "disk_total" => format!("raven_fs_total_bytes{{hostname=\"{}\"}}", host_safe),
+        "disk_used" => format!("raven_fs_used_bytes{{hostname=\"{}\"}}", host_safe),
         "network_rx" => format!(
             "sum(raven_net_iface_rx_bytes_per_sec{{hostname=\"{}\"}}) by (hostname)",
             host_safe
