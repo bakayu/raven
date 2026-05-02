@@ -13,6 +13,7 @@ pub struct User {
     pub auth_locked_until: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub last_login_at: Option<String>,
 }
 
 #[derive(Debug)]
@@ -23,6 +24,7 @@ pub struct UserRecord {
     pub role: String,
     pub created_at: String,
     pub updated_at: String,
+    pub last_login_at: Option<String>,
 }
 
 pub async fn count(db: &SqlitePool) -> AppResult<i64> {
@@ -82,7 +84,7 @@ pub async fn find_by_username(db: &SqlitePool, username: &str) -> AppResult<Opti
         User,
         r#"
         SELECT id as "id!", username, email, password_hash, role,
-            failed_login_attempts, auth_locked_until, created_at, updated_at
+            failed_login_attempts, auth_locked_until, created_at, updated_at, last_login_at
         FROM users
         WHERE username = ?
         "#,
@@ -99,7 +101,7 @@ pub async fn find_by_id(db: &SqlitePool, id: &str) -> AppResult<Option<User>> {
         User,
         r#"
          SELECT id as "id!", username, email, password_hash, role,
-             failed_login_attempts, auth_locked_until, created_at, updated_at
+             failed_login_attempts, auth_locked_until, created_at, updated_at, last_login_at
         FROM users
         WHERE id = ?
         "#,
@@ -115,7 +117,7 @@ pub async fn list(db: &SqlitePool) -> AppResult<Vec<UserRecord>> {
     let rows = sqlx::query_as!(
         UserRecord,
         r#"
-        SELECT id as "id!", username, email, role, created_at, updated_at
+        SELECT id as "id!", username, email, role, created_at, updated_at, last_login_at
         FROM users
         ORDER BY created_at DESC
         "#,
