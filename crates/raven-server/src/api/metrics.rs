@@ -41,7 +41,24 @@ async fn get_metrics(
         .unwrap_or_else(|| default_step(&from, &to));
 
     let host_safe = host.replace('"', "\\\"");
-    let vm_query = match metric {
+    let vm_query = build_vm_query(metric, &host_safe);
+    let response = state
+        .vm_client
+        .query_range(&vm_query, from.timestamp(), to.timestamp(), step)
+        .await?;
+
+    let mut payload = response;
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("from".into(), Value::String(from.to_rfc3339()));
+        obj.insert("to".into(), Value::String(to.to_rfc3339()));
+        obj.insert("step".into(), Value::String(step.to_string()));
+    }
+
+    Ok(Json(payload))
+}
+
+fn build_vm_query(metric: &str, host_safe: &str) -> String {
+    match metric {
         "cpu" => format!("raven_cpu_usage_percent{{hostname=\"{}\"}}", host_safe),
         "memory" => format!(
             "(raven_memory_used_bytes{{hostname=\"{0}\"}} / raven_memory_total_bytes{{hostname=\"{0}\"}}) * 100",
@@ -62,20 +79,7 @@ async fn get_metrics(
         ),
         "load_avg" => format!("raven_load_avg_1m{{hostname=\"{}\"}}", host_safe),
         other => format!("raven_{}{{hostname=\"{}\"}}", other, host_safe),
-    };
-    let response = state
-        .vm_client
-        .query_range(&vm_query, from.timestamp(), to.timestamp(), step)
-        .await?;
-
-    let mut payload = response;
-    if let Some(obj) = payload.as_object_mut() {
-        obj.insert("from".into(), Value::String(from.to_rfc3339()));
-        obj.insert("to".into(), Value::String(to.to_rfc3339()));
-        obj.insert("step".into(), Value::String(step.to_string()));
     }
-
-    Ok(Json(payload))
 }
 
 fn resolve_time_window(
@@ -144,5 +148,26 @@ mod tests {
 
         assert_eq!(from.to_rfc3339(), "2026-03-01T00:00:00+00:00");
         assert_eq!(to.to_rfc3339(), "2026-03-01T01:00:00+00:00");
+    }
+
+    #[test]
+    fn build_vm_query_formats_correctly() {
+        assert_eq!(
+            build_vm_query("cpu", "web-1"),
+            "raven_cpu_usage_percent{hostname=\"web-1\"}"
+        );
+        assert_eq!(
+            build_vm_query("memory_total", "web-1"),
+            "raven_memory_total_bytes{hostname=\"web-1\"}"
+        );
+        assert_eq!(
+            build_vm_query("disk_used", "db-1"),
+            "raven_fs_used_bytes{hostname=\"db-1\"}"
+        );
+        // Fallback case
+        assert_eq!(
+            build_vm_query("custom_metric", "web-1"),
+            "raven_custom_metric{hostname=\"web-1\"}"
+        );
     }
 }

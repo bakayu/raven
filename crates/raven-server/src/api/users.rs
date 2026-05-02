@@ -310,3 +310,40 @@ async fn delete_identity(
     }
     Ok(hyper::StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::jwt::Claims;
+
+    fn mock_claims(sub: &str, role: &str) -> Claims {
+        Claims {
+            sub: sub.into(),
+            username: "test".into(),
+            role: role.into(),
+            iss: "raven".into(),
+            aud: "raven".into(),
+            exp: 100000,
+            iat: 0,
+        }
+    }
+
+    #[test]
+    fn require_admin_or_self_allows_admin() {
+        let claims = mock_claims("admin-id", "admin");
+        assert!(require_admin_or_self(&claims, "some-other-id").is_ok());
+    }
+
+    #[test]
+    fn require_admin_or_self_allows_self() {
+        let claims = mock_claims("member-id", "member");
+        assert!(require_admin_or_self(&claims, "member-id").is_ok());
+    }
+
+    #[test]
+    fn require_admin_or_self_rejects_other_member() {
+        let claims = mock_claims("member-id", "member");
+        let err = require_admin_or_self(&claims, "some-other-id").unwrap_err();
+        assert!(matches!(err, AppError::Forbidden));
+    }
+}

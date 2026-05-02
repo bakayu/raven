@@ -182,3 +182,35 @@ async fn remove_agent(
     }
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_token_request_deserializes() {
+        let json = r#"{"name": "my-agent"}"#;
+        let req: GenerateTokenRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.name, "my-agent");
+    }
+
+    #[test]
+    fn agent_response_serializes() {
+        let resp = AgentResponse {
+            id: "1".into(),
+            token_id: "2".into(),
+            hostname: "host".into(),
+            ip: Some("1.2.3.4".into()),
+            os: "linux".into(),
+            agent_version: "1.0".into(),
+            log_files: serde_json::json!(["/var/log/app.log"]),
+            first_seen_at: "2023-01-01".into(),
+            last_seen_at: "2023-01-02".into(),
+            online: true,
+        };
+        let val = serde_json::to_value(&resp).unwrap();
+        assert_eq!(val["hostname"], "host");
+        assert_eq!(val["online"], true);
+        assert_eq!(val["log_files"][0], "/var/log/app.log");
+    }
+}

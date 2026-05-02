@@ -151,7 +151,7 @@ impl ClickHouseClient {
             .text()
             .await
             .map_err(|e| AppError::ClickHouse(e.to_string()))?;
-            
+
         if !status.is_success() {
             tracing::error!("ClickHouse query returned {}: {}", status, body);
             return Err(AppError::ClickHouse(format!(
@@ -367,6 +367,56 @@ mod tests {
         let err = client.write_logs(&batch).await.expect_err("should fail");
         assert!(matches!(err, AppError::ClickHouse(_)));
 
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn query_logs_parses_ndjson_correctly() {
+        let server = MockServer::start_async().await;
+
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/");
+            then.status(200)
+                .body("{\"hostname\": \"web-1\", \"line\": \"error\"}\n{\"hostname\": \"web-2\", \"line\": \"ok\"}\n");
+        });
+
+        let client = ClickHouseClient::new(&server.base_url());
+        let results = client.query_logs("SELECT *").await.expect("query logs");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["hostname"], "web-1");
+        assert_eq!(results[1]["hostname"], "web-2");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn ping_sends_empty_post() {
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/");
+            then.status(200);
+        });
+
+        let client = ClickHouseClient::new(&server.base_url());
+        client.ping().await.expect("ping");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn execute_ddl_sends_post_and_handles_error() {
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/").body("CREATE TABLE foo");
+            then.status(400).body("syntax error");
+        });
+
+        let client = ClickHouseClient::new(&server.base_url());
+        let err = client
+            .execute_ddl("CREATE TABLE foo")
+            .await
+            .expect_err("should fail");
+
+        assert!(matches!(err, AppError::ClickHouse(_)));
         mock.assert();
     }
 }

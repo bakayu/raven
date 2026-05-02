@@ -132,4 +132,15 @@ mod tests {
         let err = resolve_time_window(Some("bogus"), None, None).expect_err("must fail");
         assert!(matches!(err, AppError::Validation(_)));
     }
+
+    #[test]
+    fn escapes_sql_correctly() {
+        assert_eq!(escape_sql("normal_text"), "normal_text");
+        assert_eq!(escape_sql("text_with_'_quote"), "text_with_''_quote");
+        assert_eq!(escape_sql("'"), "''");
+        assert_eq!(
+            escape_sql("select * from 'users'"),
+            "select * from ''users''"
+        );
+    }
 }
