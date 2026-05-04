@@ -1,6 +1,10 @@
 use axum::http::HeaderValue;
 use axum::http::header::{COOKIE, HeaderMap, SET_COOKIE};
-use axum::{Extension, Json, Router, extract::State, routing::post};
+use axum::{
+    Extension, Json, Router,
+    extract::State,
+    routing::{get, post},
+};
 use chrono::{Duration, SecondsFormat, Utc};
 use hyper::StatusCode;
 use rand::prelude::*;
@@ -20,7 +24,7 @@ use serde_json::json;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/setup", post(setup))
+        .route("/setup", get(setup_status).post(setup))
         .route("/login", post(login))
         .route("/refresh", post(refresh))
         .route("/logout", post(logout))
@@ -36,6 +40,12 @@ struct SetupRequest {
 struct SetupResponse {
     message: String,
     user_id: String,
+    access_token: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupStatusResponse {
+    needs_setup: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,7 +77,7 @@ async fn setup(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
     Json(body): Json<SetupRequest>,
-) -> AppResult<(StatusCode, Json<SetupResponse>)> {
+) -> AppResult<(HeaderMap, Json<SetupResponse>)> {
     if let Some(ip) = ctx.client_ip.as_deref() {
         let key = format!("auth:setup:{ip}");
         check_rate_limit(
@@ -96,6 +106,48 @@ async fn setup(
     let hash = password::hash(&body.password)?;
     let user_id = users::create(&state.db.write, username, &hash, "admin").await?;
 
+    let auth_cfg = &state.config.auth;
+    let access_ttl_minutes = i64::try_from(auth_cfg.access_token_ttl_minutes)
+        .map_err(|_| AppError::Internal("access_token_ttl_minutes is too large".into()))?;
+
+    let access_token = jwt::issue(
+        &user_id,
+        username,
+        "admin",
+        &auth_cfg.jwt_issuer,
+        &auth_cfg.jwt_audience,
+        access_ttl_minutes,
+        auth_cfg.jwt_signing_key.expose_secret(),
+    )?;
+
+    let refresh_token: String = rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(64)
+        .map(char::from)
+        .collect();
+
+    let refresh_token_hash = tokens::hash_token(&refresh_token);
+    let refresh_ttl_days_i64 = i64::try_from(auth_cfg.refresh_token_ttl_days)
+        .map_err(|_| AppError::Internal("refresh_token_ttl_days is too large".into()))?;
+    let refresh_max_age_seconds = auth_cfg
+        .refresh_token_ttl_days
+        .checked_mul(24 * 60 * 60)
+        .ok_or_else(|| AppError::Internal("refresh token max-age overflow".into()))?;
+
+    let expires_at = (Utc::now() + Duration::days(refresh_ttl_days_i64))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+
+    sessions::insert_refresh_token(
+        &state.db.write,
+        &user_id,
+        &refresh_token_hash,
+        &expires_at,
+        None,
+        None,
+        None,
+    )
+    .await?;
+
     info!(username = %username, user_id = %user_id, "admin account created");
 
     let _ = audit::insert(
@@ -113,13 +165,34 @@ async fn setup(
     )
     .await;
 
+    let mut cookie = format!(
+        "refresh_token={}; HttpOnly; Path=/; Max-Age={}; SameSite=Strict",
+        refresh_token, refresh_max_age_seconds
+    );
+    if state.config.tls.enabled {
+        cookie.push_str("; Secure");
+    }
+
+    let mut headers = HeaderMap::new();
+    let cookie_value = HeaderValue::from_str(&cookie)
+        .map_err(|e| AppError::Internal(format!("invalid Set-Cookie value: {e}")))?;
+    headers.insert(SET_COOKIE, cookie_value);
+
     Ok((
-        StatusCode::CREATED,
+        headers,
         Json(SetupResponse {
             message: "admin account created".into(),
             user_id,
+            access_token,
         }),
     ))
+}
+
+async fn setup_status(State(state): State<AppState>) -> AppResult<Json<SetupStatusResponse>> {
+    let count = users::count(&state.db.read).await?;
+    Ok(Json(SetupStatusResponse {
+        needs_setup: count == 0,
+    }))
 }
 
 async fn login(
