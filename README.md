@@ -33,14 +33,10 @@ Raven gives you a simple, self-hostable alternative to heavy enterprise monitori
 
 **1. Deploy the central server:**
 
-<!-- ```bash
-git clone https://github.com/bakayu/raven.git
-cd raven
-docker compose up -d
-``` -->
-
-```rs
-todo!()
+```bash
+# Replace the public URL with your server address
+curl -fsSL https://github.com/rvnhq/raven/releases/latest/download/install-server.sh | sudo sh -s -- \
+	--public-url http://YOUR_SERVER_IP:8080
 ```
 
 **2. Install the agent on any server you want to monitor:**
