@@ -78,7 +78,7 @@ jobs:
         env:
           RAVEN_DATABASE__CLICKHOUSE_URL: "http://localhost:8123"
           RAVEN_DATABASE__VICTORIA_METRICS_URL: "http://localhost:8428"
-        run: cargo tarpaulin --verbose --workspace --out xml -- --ignored
+        run: cargo tarpaulin --verbose --workspace --out xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

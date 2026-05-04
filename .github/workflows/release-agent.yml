@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -83,12 +84,16 @@ jobs:
         run: |
           cp scripts/install_release.sh dist/install.sh
           cp config/agent.toml.template dist/agent.toml.template
+          cp scripts/install-server.sh dist/install-server.sh
+          cp config/server.toml.template dist/server.toml.template
+          cp docker-compose.yml dist/docker-compose.yml
           chmod +x dist/install.sh
+          chmod +x dist/install-server.sh
 
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum raven-agent-* install.sh agent.toml.template > checksums.txt
+          sha256sum raven-agent-* install.sh agent.toml.template install-server.sh server.toml.template docker-compose.yml > checksums.txt
 
       - name: Detect prerelease channel
         id: channel
@@ -109,4 +114,48 @@ jobs:
             dist/raven-agent-aarch64-unknown-linux-gnu
             dist/install.sh
             dist/agent.toml.template
+            dist/install-server.sh
+            dist/server.toml.template
+            dist/docker-compose.yml
             dist/checksums.txt
+
+  build-server-image:
+    name: Build and Push Server Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          IMAGE="ghcr.io/rvnhq/raven-server"
+          if [[ "$TAG" == *"-alpha."* || "$TAG" == *"-beta."* || "$TAG" == *"-rc."* ]]; then
+            echo "tags=${IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${IMAGE}:${TAG},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
