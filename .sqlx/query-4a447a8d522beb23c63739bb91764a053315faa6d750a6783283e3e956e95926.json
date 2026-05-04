@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE users\n        SET failed_login_attempts = 0,\n            auth_locked_until = NULL,\n            last_login_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),\n            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')\n        WHERE id = ?\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4a447a8d522beb23c63739bb91764a053315faa6d750a6783283e3e956e95926"
+}

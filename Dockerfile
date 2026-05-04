@@ -11,8 +11,10 @@ FROM rust:1.95-slim AS rust-builder
 RUN apt-get update && apt-get install -y protobuf-compiler pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
+COPY .sqlx/ ./.sqlx/
 COPY crates/ crates/
 COPY proto/ proto/
+ENV SQLX_OFFLINE=true
 RUN cargo build --release -p raven-server
 
 # Stage 3 -Runtime

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO agent_tokens (name, token_hash, created_by)\n        VALUES (?, ?, ?)\n        RETURNING id as \"id!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "e5d6ff793a9c452716fbb9dfbb7365fa017cbeb990f8f11fd8f0712dcc997c5d"
+}

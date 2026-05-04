@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE agent_tokens\n        SET revoked_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')\n        WHERE id = ?\n          AND revoked_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "1b1752f334bf61cc42598146f8134ed7a3d77bafa1befa2cc455d453df79fe64"
+}

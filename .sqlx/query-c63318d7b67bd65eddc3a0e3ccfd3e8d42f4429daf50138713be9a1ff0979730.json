@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                id as \"id!\",\n                name as \"name!\",\n                created_by as \"created_by!\",\n                created_at as \"created_at!\",\n                last_used_at,\n                revoked_at\n            FROM agent_tokens\n            WHERE revoked_at IS NULL\n            ORDER BY created_at DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_by!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_used_at",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "revoked_at",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "c63318d7b67bd65eddc3a0e3ccfd3e8d42f4429daf50138713be9a1ff0979730"
+}

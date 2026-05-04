@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO users (username, email, password_hash, role)\n        VALUES (?, ?, ?, ?)\n        RETURNING id as \"id!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c789315dd9f59aa0ee2ba8c4a609d610a1825ad53a75baf0bd03bf5e30f74923"
+}

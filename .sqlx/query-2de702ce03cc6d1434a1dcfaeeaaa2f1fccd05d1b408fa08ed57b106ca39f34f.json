@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE users\n        SET role = ?,\n            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')\n        WHERE id = ?\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2de702ce03cc6d1434a1dcfaeeaaa2f1fccd05d1b408fa08ed57b106ca39f34f"
+}

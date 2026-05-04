@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO agents (token_id, hostname, ip, os, agent_version, log_files)\n        VALUES (?, ?, ?, ?, ?, ?)\n        ON CONFLICT(token_id, hostname)\n        DO UPDATE SET\n            ip = excluded.ip,\n            os = excluded.os,\n            agent_version = excluded.agent_version,\n            log_files = excluded.log_files,\n            last_seen_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "e6e9e6c1f4eca19040c6c2fb27ea3a29419626c5fac672ded0aef4138509270b"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE agents SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')\n        WHERE token_id = ? AND hostname = ?\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c091d907f4e03506a5636edbdf2ea13c1fdce1aa0c358fdfc0cb09cb6a7257bb"
+}
