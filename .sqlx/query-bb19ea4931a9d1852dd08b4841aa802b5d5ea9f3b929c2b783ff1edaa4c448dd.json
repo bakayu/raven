@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT\n            a.id as \"id!\",\n            a.token_id,\n            a.hostname,\n            a.ip,\n            a.os as \"os!\",\n            a.agent_version as \"agent_version!\",\n            a.log_files,\n            a.first_seen_at,\n            a.last_seen_at\n        FROM agents a\n        INNER JOIN agent_tokens t ON a.token_id = t.id\n        WHERE t.created_by = ?\n        ORDER BY a.first_seen_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "token_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "hostname",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "ip",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "os!",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "agent_version!",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "log_files",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "first_seen_at",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_seen_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bb19ea4931a9d1852dd08b4841aa802b5d5ea9f3b929c2b783ff1edaa4c448dd"
+}

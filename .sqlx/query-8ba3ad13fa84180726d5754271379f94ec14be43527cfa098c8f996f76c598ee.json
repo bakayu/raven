@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        DELETE FROM agents\n        WHERE id = ?\n          AND token_id IN (SELECT id FROM agent_tokens WHERE created_by = ?)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8ba3ad13fa84180726d5754271379f94ec14be43527cfa098c8f996f76c598ee"
+}

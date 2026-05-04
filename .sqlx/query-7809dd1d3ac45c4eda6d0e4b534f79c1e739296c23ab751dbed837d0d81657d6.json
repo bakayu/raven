@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        DELETE FROM user_identities\n        WHERE id = ? AND user_id = ?\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7809dd1d3ac45c4eda6d0e4b534f79c1e739296c23ab751dbed837d0d81657d6"
+}

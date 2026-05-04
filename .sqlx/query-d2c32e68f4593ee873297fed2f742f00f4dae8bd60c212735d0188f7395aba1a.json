@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT token_id, hostname, last_seen_at\n        FROM agents\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "token_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "hostname",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_seen_at",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d2c32e68f4593ee873297fed2f742f00f4dae8bd60c212735d0188f7395aba1a"
+}

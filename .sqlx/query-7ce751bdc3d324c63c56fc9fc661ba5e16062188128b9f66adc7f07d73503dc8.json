@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO user_identities (user_id, provider, issuer, subject, email, email_verified)\n        VALUES (?, ?, ?, ?, ?, ?)\n        ON CONFLICT(issuer, subject)\n        DO UPDATE SET\n            user_id = excluded.user_id,\n            provider = excluded.provider,\n            email = excluded.email,\n            email_verified = excluded.email_verified,\n            last_login_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')\n        RETURNING id as \"id!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "7ce751bdc3d324c63c56fc9fc661ba5e16062188128b9f66adc7f07d73503dc8"
+}
