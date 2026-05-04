@@ -145,7 +145,7 @@ impl AgentConfig {
             .set_default("logging.service_name", "raven-agent")?
             .add_source(File::from(path).required(false))
             .add_source(
-                Environment::with_prefix("RAVEN")
+                Environment::with_prefix("RAVEN_AGENT")
                     .prefix_separator("_")
                     .separator("__")
                     .convert_case(config::Case::Snake)
